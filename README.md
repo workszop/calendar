@@ -22,6 +22,27 @@ HTML is revalidated so a new deployment is picked up immediately.
 
 Environment: `PORT` (default 3000), `POLLS_DATA_FILE` (default `data/polls.json`).
 
+## Netlify
+
+Connect the GitHub repository to Netlify and deploy `main`. The checked-in
+configuration builds the frontend, publishes `dist/`, and routes `/api/*` to the
+Netlify Function. Uploading only the static build with Netlify Drop is not enough.
+
+Meetings persist in the site's **Blobs** store named `calendar-polls`, under the
+`polls` key. The native function runtime supplies storage credentials; no separate
+database account or frontend API key is needed. Production data survives new
+deploys. Preview and branch deploys use separate, deploy-specific store names.
+
+Cloud writes use ETag checks and retry known conflicts, so separate function
+instances cannot silently overwrite concurrent updates. If contention persists,
+the API returns a retryable error instead of claiming a successful save. This
+shared JSON-array store is intended for small trusted groups, not a high-volume
+database. Netlify Functions and Blobs usage is subject to your account's limits.
+
+After deploying, `/api/health` must return JSON with `status: "ok"` and
+`/api/polls` must return a JSON array, not an HTML page or 404. Local commands
+continue to use the local JSON file; it is never uploaded automatically.
+
 ## Test
 
 ```bash

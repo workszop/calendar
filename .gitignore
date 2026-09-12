@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+.netlify/
 .env
 .env.*
 *.log

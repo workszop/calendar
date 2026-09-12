@@ -1,8 +1,7 @@
 import express from "express";
-import fs from "fs";
-import path from "path";
 import type { DayHours, Poll, ParticipantResponse, PollSummary, SlotStatus } from "../src/types";
 import { generateDaySlots, getDayHours, getMeetingWindow, isHalfHourValue, isValidHourWindow } from "../src/utils/consensus";
+import { createFilePollStore, type PollStore } from "./poll-store";
 
 // ─── Validation primitives ───
 
@@ -96,87 +95,17 @@ export function parseAvailability(input: unknown): ParsedAvailability {
   return { ok: true, value };
 }
 
-/** Builds the JSON API. `dataFile` is where polls persist (JSON array). */
-export function createApi(dataFile: string) {
+/** Builds the JSON API. A string keeps the original file-backed API; a PollStore enables cloud storage. */
+export function createApi(source: string | PollStore) {
   const app = express();
+  app.use("/api", (_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
   app.use(express.json({ limit: "5mb" }));
 
   // ─── Storage ───
-  // The poll array is parsed once and then kept in module scope; every
-  // mutation runs through `queue` so concurrent writes cannot clobber
-  // each other, and each write is atomic (tmp file + rename).
-
-  let cache: Poll[] | null = null;
-  let cacheStamp = "";
-  let queue: Promise<unknown> = Promise.resolve();
-
-  function ensureDataFile() {
-    fs.mkdirSync(path.dirname(dataFile), { recursive: true });
-    if (!fs.existsSync(dataFile)) fs.writeFileSync(dataFile, "[]", "utf-8");
-  }
-
-  /** Cheap fingerprint of the file on disk, so out-of-band edits invalidate. */
-  function diskStamp(): string {
-    try {
-      const st = fs.statSync(dataFile);
-      return `${st.mtimeMs}:${st.size}`;
-    } catch {
-      return "";
-    }
-  }
-
-  function loadPolls(): Poll[] {
-    ensureDataFile();
-    const stamp = diskStamp();
-    if (cache && stamp === cacheStamp) return cache;
-    // Never turn an unreadable store into an empty one: the next mutation
-    // would overwrite every existing poll. Leave both file and cache intact.
-    const parsed: unknown = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
-    if (!Array.isArray(parsed)) throw new Error("Poll store must contain an array.");
-    cache = parsed as Poll[];
-    cacheStamp = stamp;
-    return cache;
-  }
-
-  function savePolls(polls: Poll[]) {
-    ensureDataFile();
-    const tmp = `${dataFile}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(polls, null, 2), "utf-8");
-    fs.renameSync(tmp, dataFile);
-    // Publish the new state only once it is durable on disk.
-    cache = polls;
-    cacheStamp = diskStamp();
-  }
-
-  /**
-   * Serializes a read-modify-write against the poll store. `fn` works on a
-   * private clone; returning null/undefined means "nothing changed", and then
-   * nothing is written and the cache is left alone.
-   */
-  function mutate<T>(fn: (polls: Poll[]) => T): Promise<T> {
-    const run = queue.then(() => {
-      const draft = structuredClone(loadPolls());
-      const result = fn(draft);
-      if (result !== null && result !== undefined) savePolls(draft);
-      return result;
-    });
-    // Keep the chain alive even when one mutation rejects.
-    queue = run.catch(() => undefined);
-    return run;
-  }
-
-  /**
-   * Resolves one poll inside a serialized mutation: a single lookup shared by
-   * validation and the write. Returns null when the poll does not exist, or
-   * whatever `fn` returns - null from `fn` also means "do not write".
-   */
-  function mutatePoll<T>(id: string, fn: (poll: Poll) => T | null): Promise<T | null> {
-    return mutate((polls) => {
-      const poll = polls.find((p) => p.id === id);
-      if (!poll) return null;
-      return fn(poll);
-    });
-  }
+  const pollStore = typeof source === "string" ? createFilePollStore(source) : source;
 
   /** Wraps an async handler so rejections still produce a JSON 500. */
   const wrap =
@@ -188,13 +117,13 @@ export function createApi(dataFile: string) {
   // ─── Routes: read ───
 
   // Health check
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", wrap(async (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
-  });
+  }));
 
   // List all polls
-  app.get("/api/polls", (_req, res) => {
-    const polls = loadPolls();
+  app.get("/api/polls", wrap(async (_req, res) => {
+    const polls = await pollStore.load();
     const summaries: PollSummary[] = polls.map((p) => ({
       id: p.id,
       title: p.title,
@@ -209,18 +138,18 @@ export function createApi(dataFile: string) {
       participantsCount: p.participants.length,
     }));
     res.json(summaries);
-  });
+  }));
 
   // Get single poll
-  app.get("/api/polls/:id", (req, res) => {
-    const polls = loadPolls();
+  app.get("/api/polls/:id", wrap(async (req, res) => {
+    const polls = await pollStore.load();
     const poll = polls.find((p) => p.id === req.params.id);
     if (!poll) {
       res.status(404).json({ error: "Poll not found" });
       return;
     }
     res.json(poll);
-  });
+  }));
 
   // ─── Routes: create ───
 
@@ -315,7 +244,12 @@ export function createApi(dataFile: string) {
         participants: [],
       };
 
-      await mutate((polls) => {
+      await pollStore.mutate((polls) => {
+        // A CAS write may have committed before its response was lost. If
+        // the store replays this closure, the allocated id makes the create
+        // idempotent instead of inserting the same poll twice.
+        const existing = polls.find((poll) => poll.id === newPoll.id);
+        if (existing) return existing;
         polls.unshift(newPoll);
         return newPoll;
       });
@@ -357,7 +291,13 @@ export function createApi(dataFile: string) {
       let unknownParticipant = false;
       let invalidSlot: string | undefined;
 
-      const outcome = await mutatePoll(req.params.id, (poll) => {
+      const outcome = await pollStore.mutate((polls) => {
+        // Blob CAS may replay this closure. Never let an earlier attempt's
+        // diagnostic flags leak into the final response.
+        unknownParticipant = false;
+        invalidSlot = undefined;
+        const poll = polls.find((candidate) => candidate.id === req.params.id);
+        if (!poll) return null;
         const proposed = new Set(poll.dates.flatMap((date) =>
           generateDaySlots(poll, date).map((time) => `${date}T${time}`)
         ));
@@ -418,7 +358,10 @@ export function createApi(dataFile: string) {
     wrap(async (req, res) => {
       let unknownParticipant = false;
 
-      const poll = await mutatePoll(req.params.id, (found) => {
+      const poll = await pollStore.mutate((polls) => {
+        unknownParticipant = false;
+        const found = polls.find((candidate) => candidate.id === req.params.id);
+        if (!found) return null;
         const remaining = found.participants.filter((p) => p.id !== req.params.participantId);
         // Nothing removed means the id was never here: 404 without a write.
         if (remaining.length === found.participants.length) {
@@ -450,7 +393,11 @@ export function createApi(dataFile: string) {
       // exactly one lookup and one 404 path.
       let failure: { status: number; error: string } | null = null;
 
-      const poll = await mutatePoll(req.params.id, (found) => {
+      const poll = await pollStore.mutate((polls) => {
+        // Validation may run again after a CAS conflict.
+        failure = null;
+        const found = polls.find((candidate) => candidate.id === req.params.id);
+        if (!found) return null;
         const reject = (error: string) => {
           failure = { status: 400, error };
           return null;
@@ -513,7 +460,9 @@ export function createApi(dataFile: string) {
   app.post(
     "/api/polls/:id/reset",
     wrap(async (req, res) => {
-      const poll = await mutatePoll(req.params.id, (found) => {
+      const poll = await pollStore.mutate((polls) => {
+        const found = polls.find((candidate) => candidate.id === req.params.id);
+        if (!found) return null;
         found.finalizedSlot = null;
         return found;
       });
