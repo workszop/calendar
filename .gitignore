@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.log
+# intermediate artifacts
+mockups/
+plans/
+superpowers/
+progress.md
+review*.md
+*.plan.md
+*.draft.*
+scratch/
+data/

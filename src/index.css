@@ -1,0 +1,204 @@
+/* ─── edulab "Editorial Color" foundation ─── */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+/* ─── Tailwind v4 theme remap → edulab tokens ───
+   Existing utilities keep their names; their values now resolve to edulab.
+   stone   → paper / ink neutrals
+   emerald → green (secondary, availability data ramp)
+   amber   → yellow (primary, preferred / if-needed data ramp)
+   rose    → red (danger)
+   yellow  → primary actions (dark text on yellow)                     */
+@theme {
+  --font-display: 'Outfit', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Roboto Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* paper / ink */
+  --color-white: #FFFFFF;
+  --color-stone-50: #FBF7E6;
+  --color-stone-100: #F5EDCB;
+  --color-stone-200: #EDE7D2;
+  --color-stone-300: #DDD4B6;
+  --color-stone-400: #948C82;
+  --color-stone-500: #57534E;
+  --color-stone-600: #57534E;
+  --color-stone-700: #57534E;
+  --color-stone-800: #1C1917;
+  --color-stone-900: #1C1917;
+  --color-stone-950: #1C1917;
+
+  /* yellow - primary */
+  --color-yellow-50: #FFD500;
+  --color-yellow-100: #FFD500;
+  --color-yellow-500: #FFD500;
+  --color-yellow-600: #F0C800;
+  --color-yellow-700: #D9B400;
+  --color-yellow-950: #1C1917;
+
+  /* amber → yellow data ramp (preferred / if-needed) */
+  --color-amber-50: #FFF7CC;
+  --color-amber-100: #FFF0A6;
+  --color-amber-200: #FFE873;
+  --color-amber-300: #FFE04D;
+  --color-amber-400: #FFD500;
+  --color-amber-500: #FFD500;
+  --color-amber-600: #F0C800;
+  --color-amber-700: #8A6D00;
+  --color-amber-800: #6B5500;
+  --color-amber-900: #4D3D00;
+  --color-amber-950: #1C1917;
+
+  /* emerald → green data ramp (availability) */
+  --color-emerald-50: #E6F6ED;
+  --color-emerald-100: #CCEDDC;
+  --color-emerald-200: #99DBB9;
+  --color-emerald-300: #66CA97;
+  --color-emerald-400: #33B874;
+  --color-emerald-500: #00A651;
+  --color-emerald-600: #009444;
+  --color-emerald-700: #00753A;
+  --color-emerald-800: #005C2E;
+  --color-emerald-900: #004423;
+  --color-emerald-950: #1C1917;
+
+  /* green - solid secondary */
+  --color-green-500: #00A651;
+  --color-green-600: #009444;
+  --color-green-700: #00753A;
+
+  /* blue - secondary */
+  --color-blue-500: #1E8FC2;
+  --color-blue-600: #177AA8;
+
+  /* red - danger */
+  --color-red-400: #E5322D;
+  --color-red-500: #E5322D;
+  --color-red-600: #C92823;
+  --color-red-700: #C92823;
+
+  /* radii - generous */
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 20px;
+  --radius-3xl: 28px;
+
+  /* elevation - warm, low, soft */
+  --shadow-xs: 0 1px 2px rgba(33,30,26,.06), 0 1px 1px rgba(33,30,26,.04);
+  --shadow-sm: 0 1px 2px rgba(33,30,26,.06), 0 1px 1px rgba(33,30,26,.04);
+  --shadow-md: 0 4px 16px rgba(33,30,26,.08), 0 1px 3px rgba(33,30,26,.05);
+  --shadow-lg: 0 16px 40px rgba(33,30,26,.12), 0 3px 8px rgba(33,30,26,.06);
+  --shadow-xl: 0 16px 40px rgba(33,30,26,.12), 0 3px 8px rgba(33,30,26,.06);
+}
+
+/* ─── Semantic tokens (edulab names, for non-utility CSS) ─── */
+:root {
+  --paper: #FFFFFF; --paper-2: #FBF7E6; --paper-3: #F5EDCB; --surface: #FFFFFF;
+  --ink: #1C1917; --ink-2: #57534E; --ink-3: #948C82; --line: #EDE7D2; --line-2: #DDD4B6;
+  --yellow: #FFD500; --yellow-600: #F0C800; --yellow-ink: #1C1917;
+  --blue: #1E8FC2; --blue-ink: #FFFFFF;
+  --green: #00A651; --green-ink: #FFFFFF;
+  --red: #E5322D; --red-ink: #FFFFFF;
+  --r-xs: 6px; --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 28px; --r-pill: 999px;
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--yellow) 45%, transparent);
+  --scrim: color-mix(in srgb, #1C1917 55%, transparent);
+}
+
+/* ─── Base ─── */
+@layer base {
+  body { background: var(--paper); color: var(--ink); font-family: var(--font-sans); }
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.02em; }
+  :focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+}
+
+/* ─── App chrome ─── */
+.edu-header {
+  position: sticky; top: 0; z-index: 30; width: 100%;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.edu-header-inner {
+  max-width: 1100px; margin: 0 auto; padding: 8px 30px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.edu-logo { width: 64px; height: 64px; display: block; margin-right: -6px; }
+.edu-wordmark { font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: -.02em; color: var(--ink); }
+
+.app-title {
+  font-family: var(--font-display); font-weight: 800;
+  font-size: clamp(2rem, 4.5vw, 2.85rem); letter-spacing: -.025em;
+  line-height: 1.05; color: var(--ink);
+}
+.edu-lead { font-size: 1.0625rem; color: var(--ink-2); margin: 0; }
+
+/* ─── Components ─── */
+/* Kept in the components layer so Tailwind utilities (px-5, w-auto, ...)
+   applied alongside these classes still win. */
+@layer components {
+  .edu-input {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 14px;
+    background: var(--paper-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    font-weight: 500;
+    color: var(--ink);
+  }
+  /* Keeps the base 3px outline; the halo and border are extra affordance. */
+  .edu-input:focus-visible {
+    box-shadow: var(--focus-ring);
+    border-color: var(--yellow);
+  }
+
+  .edu-label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--ink-2);
+    margin-bottom: 4px;
+  }
+
+  .edu-btn-primary,
+  .edu-btn-secondary,
+  .edu-btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: var(--r-pill);
+    font-weight: 700;
+    font-size: 12px;
+    transition: background-color .15s;
+  }
+
+  .edu-btn-primary {
+    background: var(--yellow);
+    color: var(--yellow-ink);
+  }
+  .edu-btn-primary:hover { background: var(--yellow-600); }
+  .edu-btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+  .edu-btn-secondary {
+    background: var(--surface);
+    color: var(--ink-2);
+    border: 1px solid var(--line-2);
+  }
+  .edu-btn-secondary:hover { background: var(--paper-2); border-color: var(--ink-3); }
+  .edu-btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
+
+  .edu-btn-ghost {
+    background: transparent;
+    color: var(--ink-2);
+  }
+  .edu-btn-ghost:hover { background: var(--paper-2); }
+  .edu-btn-ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Dialog backdrop - warm ink instead of pure black */
+  .edu-scrim { background: var(--scrim); }
+}
