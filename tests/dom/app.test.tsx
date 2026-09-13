@@ -275,4 +275,33 @@ describe('App async navigation contract', () => {
     expect(deleted).toBe(true);
     expect(window.location.search).toBe('?poll=p2');
   });
+  it('Home and the logo return to the main page: the newest poll on the heatmap', async () => {
+    const newest = makePoll('p1', 'Newest');
+    const older = makePoll('p2', 'Older');
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(newest), summary(older)]));
+      if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(newest));
+      if (url === '/api/polls/p2') return Promise.resolve(jsonResponse(older));
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.pushState({}, '', '/?poll=p2');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Older' });
+    // Arrived by link, so the painter is open.
+    expect(screen.getByRole('tab', { name: 'Mark My Availability' }).getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Home' }));
+    await screen.findByRole('heading', { name: 'Newest' });
+    expect(window.location.search).toBe('?poll=p1');
+    expect(screen.getByRole('tab', { name: 'Group Heatmap' }).getAttribute('aria-selected')).toBe('true');
+
+    const historyLength = window.history.length;
+    fireEvent.click(screen.getByRole('link', { name: /edulab/ }));
+    await settle();
+    expect(window.history.length).toBe(historyLength);
+    expect(document.querySelector('[data-active-poll-id]')?.getAttribute('data-active-poll-id')).toBe('p1');
+  });
 });

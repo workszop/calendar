@@ -286,6 +286,17 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, [resolveInitialPoll]);
 
+  // Home: the app's main page, exactly what "/" shows on a fresh load - the
+  // newest poll, or the blank draft when there is none.
+  const goHome = useCallback(async () => {
+    setActiveTab('heatmap');
+    const list = await fetchPollsList();
+    // One history entry per real move; already home only refreshes the poll.
+    const current = new URLSearchParams(window.location.search).get('poll');
+    if (current !== (list[0]?.id ?? null)) syncPollUrl(null, 'push');
+    await resolveInitialPoll('replace', list);
+  }, [fetchPollsList, resolveInitialPoll, syncPollUrl]);
+
   useEffect(() => {
     if (activeTab !== 'heatmap' || !focusHeatmapTabRef.current) return;
     focusHeatmapTabRef.current = false;
@@ -567,6 +578,7 @@ export default function App() {
         onOpenNewPoll={() => setIsCreateModalOpen(true)}
         onOpenShare={() => setIsShareModalOpen(true)}
         onOpenPollsList={() => setIsPollListModalOpen(true)}
+        onGoHome={() => void goHome()}
       />
 
       {/* Main Content Area */}
