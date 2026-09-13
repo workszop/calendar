@@ -237,4 +237,42 @@ describe('App async navigation contract', () => {
     expect(screen.queryByRole('dialog', { name: 'Remove response?' })).toBeNull();
     expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/respond/'))).toBe(false);
   });
+  it('deletes the poll on screen after confirmation and moves to the next poll', async () => {
+    const poll1 = makePoll('p1', 'P1');
+    const poll2 = makePoll('p2', 'P2');
+    let deleted = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/polls') {
+        return Promise.resolve(jsonResponse(deleted ? [summary(poll2)] : [summary(poll1), summary(poll2)]));
+      }
+      if (url === '/api/polls/p1' && init?.method === 'DELETE') {
+        deleted = true;
+        return Promise.resolve(jsonResponse({ id: 'p1' }));
+      }
+      if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll1));
+      if (url === '/api/polls/p2') return Promise.resolve(jsonResponse(poll2));
+      throw new Error(`Unexpected ${init?.method ?? 'GET'} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'P1' });
+    fireEvent.click(screen.getByRole('button', { name: 'All Polls' }));
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-poll-id="p1"]');
+      if (!found) throw new Error('row missing');
+      return found;
+    });
+    fireEvent.click(row.querySelector<HTMLButtonElement>('button[aria-label="Delete"]')!);
+
+    // Nothing is removed until the dialog is confirmed.
+    expect(screen.getByRole('dialog', { name: 'Delete poll?' })).toBeTruthy();
+    expect(deleted).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete poll' }));
+
+    await screen.findByRole('heading', { name: 'P2' });
+    expect(deleted).toBe(true);
+    expect(window.location.search).toBe('?poll=p2');
+  });
 });

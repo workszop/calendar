@@ -460,6 +460,21 @@ describe('poll API', () => {
     expect(fs.readFileSync(file, 'utf-8')).toBe(beforeBody);
   });
 
+  it('deletes a poll, and 404s an unknown one', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Doomed', dates: ['2027-05-02'] })).json;
+    await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Gus', availability: {} });
+
+    const del = await api('DELETE', `/api/polls/${poll.id}`);
+    expect(del.status).toBe(200);
+    expect(del.json).toEqual({ id: poll.id });
+    expect((await api('GET', `/api/polls/${poll.id}`)).status).toBe(404);
+    expect((await api('GET', '/api/polls')).json.some((p: { id: string }) => p.id === poll.id)).toBe(false);
+
+    const again = await api('DELETE', `/api/polls/${poll.id}`);
+    expect(again.status).toBe(404);
+    expect(again.json.error).toBe('Poll not found');
+  });
+
   it('accepts 24:00 as an end time', async () => {
     const poll = (
       await api('POST', '/api/polls', {

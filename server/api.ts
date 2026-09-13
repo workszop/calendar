@@ -257,6 +257,27 @@ export function createApi(source: string | PollStore) {
     })
   );
 
+  // ─── Routes: delete ───
+
+  app.delete(
+    "/api/polls/:id",
+    wrap(async (req, res) => {
+      const deleted = await pollStore.mutate((polls) => {
+        const index = polls.findIndex((poll) => poll.id === req.params.id);
+        // Nothing to remove: 404 without a write.
+        if (index === -1) return null;
+        polls.splice(index, 1);
+        return { id: req.params.id };
+      });
+
+      if (!deleted) {
+        res.status(404).json({ error: "Poll not found" });
+        return;
+      }
+      res.json(deleted);
+    })
+  );
+
   // ─── Routes: participant responses ───
 
   app.post(

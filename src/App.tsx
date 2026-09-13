@@ -100,6 +100,7 @@ export default function App() {
     id: string;
     name: string;
   } | null>(null);
+  const [pendingPollDelete, setPendingPollDelete] = useState<PollSummary | null>(null);
   // Remount key for the painter. It changes only when the user genuinely moves
   // to a different poll, never when a draft is persisted mid-save: the painter
   // must stay mounted so its inline error survives a failing /respond.
@@ -396,6 +397,31 @@ export default function App() {
       showToast(`Removed ${target.name}'s response`);
     } catch (err) {
       showToast(errorMessage(err, 'Error removing response'));
+    }
+  };
+
+  // Delete a whole poll (confirmed through the dialog). If it is the poll on
+  // screen, move to the newest remaining poll, or the blank draft when none is left.
+  const confirmDeletePoll = async () => {
+    const target = pendingPollDelete;
+    setPendingPollDelete(null);
+    if (!target) return;
+
+    try {
+      const res = await fetch(`/api/polls/${target.id}`, { method: 'DELETE' });
+      if (!res.ok) throw await readError(res, 'Failed to delete poll');
+      const remaining = await fetchPollsList();
+      showToast(`Deleted "${target.title}"`);
+      if (activePollIdRef.current !== target.id) return;
+      const next = remaining.find((p) => p.id !== target.id);
+      if (next) {
+        await fetchPoll(next.id, 'replace');
+      } else {
+        syncPollUrl(null, 'replace');
+        showDraftPoll();
+      }
+    } catch (err) {
+      showToast(errorMessage(err, 'Error deleting poll'));
     }
   };
 
@@ -796,6 +822,27 @@ export default function App() {
         activePollId={poll?.id || null}
         onSelectPoll={(id) => void fetchPoll(id)}
         onOpenNewPoll={() => setIsCreateModalOpen(true)}
+        onDeletePoll={setPendingPollDelete}
+      />
+
+      <ConfirmDialog
+        isOpen={pendingPollDelete !== null}
+        title="Delete poll?"
+        message={
+          pendingPollDelete
+            ? `"${pendingPollDelete.title}"${
+                pendingPollDelete.participantsCount === 0
+                  ? ''
+                  : ` and its ${pendingPollDelete.participantsCount} ${
+                      pendingPollDelete.participantsCount === 1 ? 'response' : 'responses'
+                    }`
+              } will be deleted for everyone. This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete poll"
+        danger
+        onConfirm={() => void confirmDeletePoll()}
+        onCancel={() => setPendingPollDelete(null)}
       />
 
       <ConfirmDialog
