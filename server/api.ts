@@ -71,6 +71,51 @@ export function parseDayHours(input: unknown, dates: string[]): ParsedDayHours {
   return Object.keys(value).length ? { ok: true, value } : { ok: true };
 }
 
+export type ParsedProposedSlots =
+  | { ok: true; value?: Record<string, string[]> }
+  | { ok: false; error: string };
+
+/**
+ * Validates an exact per-date proposal: every poll date needs at least one
+ * "HH:mm" slot start on the poll's interval grid. Gaps are allowed.
+ */
+export function parseProposedSlots(input: unknown, dates: string[], slotInterval: number): ParsedProposedSlots {
+  if (input === undefined || input === null) return { ok: true };
+  if (typeof input !== "object" || Array.isArray(input)) {
+    return { ok: false, error: "proposedSlots must be an object keyed by date." };
+  }
+
+  const raw = input as Record<string, unknown>;
+  const allowed = new Set(dates);
+  const extra = Object.keys(raw).find((date) => !allowed.has(date));
+  if (extra) {
+    return { ok: false, error: `proposedSlots contains ${extra}, which is not one of the poll dates.` };
+  }
+
+  const value: Record<string, string[]> = {};
+  for (const date of dates) {
+    const times = raw[date];
+    if (!Array.isArray(times) || times.length === 0) {
+      return { ok: false, error: `proposedSlots for ${date} must list at least one time.` };
+    }
+    const bad = times.find(
+      (t) =>
+        typeof t !== "string" ||
+        t === "24:00" ||
+        !TIME_RE.test(t) ||
+        timeToMinutes(t) % slotInterval !== 0
+    );
+    if (bad !== undefined) {
+      return {
+        ok: false,
+        error: `proposedSlots for ${date} has "${String(bad)}"; use HH:mm starts every ${slotInterval} minutes.`,
+      };
+    }
+    value[date] = [...new Set(times as string[])].sort();
+  }
+  return { ok: true, value };
+}
+
 export type ParsedAvailability =
   | { ok: true; value: Record<string, SlotStatus> }
   | { ok: false; error: string };
@@ -211,8 +256,8 @@ export function createApi(source: string | PollStore) {
         res.status(400).json({ error: "endHour must be a whole or half hour between 0 and 24." });
         return;
       }
-      const startHour = hasStart ? (body.startHour as number) : 9;
-      const endHour = hasEnd ? (body.endHour as number) : 17;
+      let startHour = hasStart ? (body.startHour as number) : 9;
+      let endHour = hasEnd ? (body.endHour as number) : 17;
       if (startHour >= endHour) {
         res.status(400).json({ error: "startHour must be before endHour." });
         return;
@@ -222,6 +267,22 @@ export function createApi(source: string | PollStore) {
       if (!dayHours.ok) {
         res.status(400).json({ error: dayHours.error });
         return;
+      }
+
+      const proposedSlots = parseProposedSlots(body.proposedSlots, dates, slotInterval);
+      if (!proposedSlots.ok) {
+        res.status(400).json({ error: proposedSlots.error });
+        return;
+      }
+      if (proposedSlots.value) {
+        if (dayHours.value) {
+          res.status(400).json({ error: "Send either dayHours or proposedSlots, not both." });
+          return;
+        }
+        // Keep the poll-wide window equal to the proposal's outer span.
+        const allTimes = Object.values(proposedSlots.value).flat().map(timeToMinutes);
+        startHour = Math.min(...allTimes) / 60;
+        endHour = (Math.max(...allTimes) + slotInterval) / 60;
       }
 
       const id = "poll_" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
@@ -236,6 +297,7 @@ export function createApi(source: string | PollStore) {
         startHour,
         endHour,
         dayHours: dayHours.value,
+        proposedSlots: proposedSlots.value,
         slotInterval,
         creatorName: optionalText(body.creatorName, "Organizer"),
         creatorEmail: optionalText(body.creatorEmail),

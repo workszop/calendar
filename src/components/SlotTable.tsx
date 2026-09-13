@@ -1,5 +1,4 @@
 import React from 'react';
-import type { Poll } from '../types';
 import type { PollGrid } from '../hooks/usePollGrid';
 import { formatTimeSlot } from '../utils/calendar';
 
@@ -10,7 +9,8 @@ import { formatTimeSlot } from '../utils/calendar';
 // hand those in and this component owns the markup they share.
 
 interface SlotTableProps {
-  poll: Poll;
+  /** Column dates as YYYY-MM-DD, in display order. */
+  dates: string[];
   timeSlots: PollGrid['timeSlots'];
   isProposed: PollGrid['isProposed'];
   dateHeadings: PollGrid['dateHeadings'];
@@ -24,7 +24,7 @@ interface SlotTableProps {
 }
 
 export const SlotTable: React.FC<SlotTableProps> = ({
-  poll,
+  dates,
   timeSlots,
   isProposed,
   dateHeadings,
@@ -40,7 +40,7 @@ export const SlotTable: React.FC<SlotTableProps> = ({
           <th className="sticky left-0 z-10 bg-stone-50 py-3 px-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wider font-mono w-24 border-r border-stone-200">
             Time
           </th>
-          {poll.dates.map((dateStr) => {
+          {dates.map((dateStr) => {
             const heading = dateHeadings.get(dateStr);
             return (
               <th
@@ -71,7 +71,7 @@ export const SlotTable: React.FC<SlotTableProps> = ({
               {formatTimeSlot(timeStr)}
             </td>
 
-            {poll.dates.map((dateStr) =>
+            {dates.map((dateStr) =>
               isProposed(dateStr, timeStr) ? (
                 <td
                   key={dateStr}

@@ -335,7 +335,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
       >
         <div onMouseLeave={() => setHoveredKey(null)}>
           <SlotTable
-            poll={poll}
+            dates={poll.dates}
             timeSlots={timeSlots}
             isProposed={isProposed}
             dateHeadings={dateHeadings}

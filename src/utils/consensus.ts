@@ -50,8 +50,22 @@ export function generateTimeSlots(startHour: number, endHour: number, intervalMi
   return slots;
 }
 
-// Hour window for one date: its override, or the poll-wide default
+// Explicit slots proposed for one date, or null when the poll uses hour windows
+function getProposedSlots(poll: Poll, date: string): string[] | null {
+  const slots = poll.proposedSlots?.[date];
+  return slots && slots.length ? [...slots].sort() : null;
+}
+
+// Outer hour window for one date: the span of its proposed slots, its
+// override, or the poll-wide default
 export function getDayHours(poll: Poll, date: string): DayHours {
+  const proposed = getProposedSlots(poll, date);
+  if (proposed) {
+    return {
+      startHour: timeToMinutes(proposed[0]) / 60,
+      endHour: (timeToMinutes(proposed[proposed.length - 1]) + poll.slotInterval) / 60,
+    };
+  }
   const override = poll.dayHours?.[date];
   if (override && isValidHourWindow(override.startHour, override.endHour)) return override;
   return { startHour: poll.startHour, endHour: poll.endHour };
@@ -59,6 +73,8 @@ export function getDayHours(poll: Poll, date: string): DayHours {
 
 // Slots suggested for one date
 export function generateDaySlots(poll: Poll, date: string): string[] {
+  const proposed = getProposedSlots(poll, date);
+  if (proposed) return proposed;
   const { startHour, endHour } = getDayHours(poll, date);
   return generateTimeSlots(startHour, endHour, poll.slotInterval);
 }
@@ -105,6 +121,11 @@ export function getMeetingWindow(poll: Poll, date: string, startTime: string): M
   const slotsNeeded = Math.max(1, Math.ceil(duration / interval));
   const slotTimes = daySlots.slice(startIndex, startIndex + slotsNeeded);
   if (slotTimes.length !== slotsNeeded) return null;
+  // A meeting must not jump over a gap in the proposed slots.
+  const contiguous = slotTimes.every(
+    (time, i) => i === 0 || timeToMinutes(time) === timeToMinutes(slotTimes[i - 1]) + interval
+  );
+  if (!contiguous) return null;
 
   return {
     startTime,

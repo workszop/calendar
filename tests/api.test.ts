@@ -127,6 +127,53 @@ describe('poll API', () => {
     expect(noHours.json.dayHours).toBeUndefined();
   });
 
+  it('stores proposed slots with gaps and only accepts answers inside them', async () => {
+    const res = await api('POST', '/api/polls', {
+      title: 'Gaps',
+      dates: ['2026-11-10', '2026-11-11'],
+      startHour: 8,
+      endHour: 18,
+      proposedSlots: {
+        '2026-11-10': ['14:00', '09:00', '09:30', '09:30'],
+        '2026-11-11': ['12:00'],
+      },
+    });
+    expect(res.status).toBe(201);
+    // Sorted, deduped, and the poll-wide window follows the proposal's span.
+    expect(res.json.proposedSlots).toEqual({ '2026-11-10': ['09:00', '09:30', '14:00'], '2026-11-11': ['12:00'] });
+    expect(res.json).toMatchObject({ startHour: 9, endHour: 14.5 });
+
+    const inGap = await api('POST', `/api/polls/${res.json.id}/respond`, {
+      name: 'Hal',
+      availability: { '2026-11-10T10:00': 'available' },
+    });
+    expect(inGap.status).toBe(400);
+    const inside = await api('POST', `/api/polls/${res.json.id}/respond`, {
+      name: 'Hal',
+      availability: { '2026-11-10T14:00': 'available' },
+    });
+    expect(inside.status).toBe(200);
+  });
+
+  it('rejects malformed proposed slots', async () => {
+    const post = (proposedSlots: unknown, extra: Record<string, unknown> = {}) =>
+      api('POST', '/api/polls', { title: 'Bad', dates: ['2026-11-10', '2026-11-11'], proposedSlots, ...extra });
+
+    expect((await post(['09:00'])).status).toBe(400);
+    const missingDay = await post({ '2026-11-10': ['09:00'] });
+    expect(missingDay.status).toBe(400);
+    expect(missingDay.json.error).toContain('2026-11-11');
+    expect((await post({ '2026-11-10': ['09:00'], '2026-11-11': [] })).status).toBe(400);
+    expect((await post({ '2026-11-10': ['09:15'], '2026-11-11': ['09:00'] })).status).toBe(400);
+    expect((await post({ '2026-11-10': ['24:00'], '2026-11-11': ['09:00'] })).status).toBe(400);
+    expect((await post({ '2026-11-10': ['09:00'], '2026-11-11': ['09:00'], '2026-11-12': ['09:00'] })).status).toBe(400);
+    const both = await post(
+      { '2026-11-10': ['09:00'], '2026-11-11': ['09:00'] },
+      { dayHours: { '2026-11-10': { startHour: 9, endHour: 10 } } }
+    );
+    expect(both.status).toBe(400);
+  });
+
   it('rejects malformed hours instead of silently dropping them', async () => {
     // startHour must precede endHour
     const inverted = await api('POST', '/api/polls', {

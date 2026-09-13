@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import type { DayHours, Poll } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
-import { isValidHourWindow } from '../utils/consensus';
+import { generateTimeSlots, isValidHourWindow } from '../utils/consensus';
 import { getStoredUser, setStoredUser } from '../utils/storage';
 import { Modal } from './Modal';
 import { MonthCalendar, monthOfDateStr, startOfMonth } from './MonthCalendar';
-import { HourSelect, PerDayHours } from './PerDayHours';
+import { HourSelect } from './HourSelect';
+import { ProposalGrid } from './ProposalGrid';
 
 // ─── Types ───
 interface CreatePollModalProps {
@@ -28,6 +29,10 @@ const DEFAULT_END_HOUR = 17;
 const SLOT_INTERVAL = 30; // grid granularity in minutes
 
 // ─── Helpers ───
+function rangeTimes(startHour: number, endHour: number): string[] {
+  return isValidHourWindow(startHour, endHour) ? generateTimeSlots(startHour, endHour, SLOT_INTERVAL) : [];
+}
+
 function getNextDates(count: number, startOffset = 1): string[] {
   const now = new Date();
   return Array.from({ length: count }, (_, i) => {
@@ -62,8 +67,8 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
   const [creatorName, setCreatorName] = useState('');
   const [creatorEmail, setCreatorEmail] = useState('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
-  // Per-date overrides of the daily hours; a date absent here follows startHour/endHour
-  const [dayHours, setDayHours] = useState<Record<string, DayHours>>({});
+  // date -> proposed slot starts, edited on the drag grid inside the hour range
+  const [proposed, setProposed] = useState<Record<string, string[]>>({});
   const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -78,6 +83,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
   };
 
   const todayStr = toDateStr(new Date());
+  const gridTimes = useMemo(() => rangeTimes(startHour, endHour), [startHour, endHour]);
 
   // A fresh draft every time the modal opens, so nothing leaks between polls.
   useEffect(() => {
@@ -93,33 +99,51 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
     setCreatorEmail(stored.email);
     // No dates are preselected: the organizer picks them (or uses a preset).
     setSelectedDates([]);
-    setDayHours({});
+    setProposed({});
     setViewMonth(startOfMonth(new Date()));
     setErrors({});
     setIsSubmitting(false);
   }, [isOpen]);
 
-  const hoursFor = (date: string): DayHours => dayHours[date] ?? { startHour, endHour };
+  // A newly selected date proposes the whole hour range; the organizer trims it.
+  const withDefaultProposals = (dates: string[]) =>
+    setProposed((prev) =>
+      Object.fromEntries(dates.map((d) => [d, prev[d] ?? rangeTimes(startHour, endHour)]))
+    );
 
-  const setHoursFor = (date: string, patch: Partial<DayHours>) =>
-    setDayHours((prev) => ({ ...prev, [date]: { ...(prev[date] ?? { startHour, endHour }), ...patch } }));
-
-  const resetHoursFor = (date: string) =>
-    setDayHours((prev) => {
-      const next = { ...prev };
-      delete next[date];
-      return next;
-    });
+  // Changing the range keeps each day's picks inside it and proposes rows that
+  // just became visible, so widening the range extends every day.
+  const changeRange = (nextStart: number, nextEnd: number) => {
+    setStartHour(nextStart);
+    setEndHour(nextEnd);
+    setErrors((prev) => ({ ...prev, hours: undefined }));
+    // An inverted range is reported on submit; keep the picks until it is fixed.
+    if (!isValidHourWindow(nextStart, nextEnd)) return;
+    const before = new Set(rangeTimes(startHour, endHour));
+    const after = rangeTimes(nextStart, nextEnd);
+    const added = after.filter((t) => !before.has(t));
+    setProposed((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([d, times]) => [
+          d,
+          [...new Set([...times.filter((t) => after.includes(t)), ...added])].sort(),
+        ])
+      )
+    );
+  };
 
   const toggleDate = (dateStr: string) => {
     setErrors((prev) => ({ ...prev, dates: undefined }));
-    setSelectedDates((prev) =>
-      prev.includes(dateStr) ? prev.filter((d) => d !== dateStr) : [...prev, dateStr].sort()
-    );
+    const next = selectedDates.includes(dateStr)
+      ? selectedDates.filter((d) => d !== dateStr)
+      : [...selectedDates, dateStr].sort();
+    setSelectedDates(next);
+    withDefaultProposals(next);
   };
 
   const applyPreset = (dates: string[]) => {
     setSelectedDates(dates);
+    withDefaultProposals(dates);
     setErrors((prev) => ({ ...prev, dates: undefined }));
     if (dates[0]) setViewMonth(monthOfDateStr(dates[0]));
   };
@@ -133,14 +157,13 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
 
     if (!title.trim()) nextErrors.title = 'Give the meeting a title.';
     if (dates.length === 0) nextErrors.dates = 'Select at least one candidate date.';
+    const allTimes = rangeTimes(startHour, endHour);
     if (!isValidHourWindow(startHour, endHour)) {
       nextErrors.hours = 'Start hour must be earlier than end hour.';
     } else {
-      const badDay = dates.find(
-        (d) => !isValidHourWindow(hoursFor(d).startHour, hoursFor(d).endHour)
-      );
-      if (badDay) {
-        nextErrors.hours = `${formatDateHeading(badDay).full}: start hour must be earlier than end hour.`;
+      const emptyDay = dates.find((d) => !(proposed[d] ?? []).length);
+      if (emptyDay) {
+        nextErrors.hours = `${formatDateHeading(emptyDay).full}: propose at least one time.`;
       }
     }
 
@@ -148,7 +171,9 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    const overrides = Object.fromEntries(dates.filter((d) => dayHours[d]).map((d) => [d, dayHours[d]]));
+    // A plain hour window is sent when every day proposes the full range.
+    const isFullRange = dates.every((d) => (proposed[d] ?? []).length === allTimes.length);
+    const proposedSlots = Object.fromEntries(dates.map((d) => [d, proposed[d] ?? []]));
 
     setIsSubmitting(true);
     // Both fields are optional: leaving one blank must not wipe a stored value.
@@ -165,7 +190,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
         durationMinutes,
         startHour,
         endHour,
-        dayHours: Object.keys(overrides).length ? overrides : undefined,
+        proposedSlots: isFullRange ? undefined : proposedSlots,
         slotInterval: SLOT_INTERVAL,
         dates,
         creatorName: creatorName.trim() || 'Organizer',
@@ -187,7 +212,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
       onClose={handleClose}
       title="Create New Meeting Poll"
       subtitle="Invite your team or group to vote and find the best meeting time."
-      panelClassName="max-w-xl"
+      panelClassName="max-w-2xl"
       initialFocusRef={titleInputRef}
       dismissOnBackdrop={false}
     >
@@ -315,58 +340,62 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
           )}
         </fieldset>
 
-        {/* Default hours window */}
-        <div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Proposed times: hour range, then drag to fine-tune each day */}
+        <fieldset className="space-y-2">
+          <legend className="edu-label">Proposed times</legend>
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="poll-start-hour" className="edu-label">
-                Proposed hours from
+              <label htmlFor="poll-start-hour" className="text-xs font-semibold text-stone-600">
+                From
               </label>
               <HourSelect
                 id="poll-start-hour"
                 value={startHour}
                 invalid={Boolean(errors.hours)}
                 describedBy={errors.hours ? 'poll-hours-error' : undefined}
-                onChange={(h) => {
-                  setStartHour(h);
-                  if (errors.hours) setErrors((prev) => ({ ...prev, hours: undefined }));
-                }}
+                onChange={(h) => changeRange(h, endHour)}
                 className="edu-input"
               />
             </div>
 
             <div>
-              <label htmlFor="poll-end-hour" className="edu-label">
-                Proposed hours until
+              <label htmlFor="poll-end-hour" className="text-xs font-semibold text-stone-600">
+                Until
               </label>
               <HourSelect
                 id="poll-end-hour"
                 value={endHour}
                 invalid={Boolean(errors.hours)}
                 describedBy={errors.hours ? 'poll-hours-error' : undefined}
-                onChange={(h) => {
-                  setEndHour(h);
-                  if (errors.hours) setErrors((prev) => ({ ...prev, hours: undefined }));
-                }}
+                onChange={(h) => changeRange(startHour, h)}
                 className="edu-input"
               />
             </div>
           </div>
+          {selectedDates.length > 0 && (
+            <p className="text-xs text-stone-500">
+              Drag across the grid to add or remove times. Start on a selected slot to remove, on an
+              empty one to add. Click a day to toggle all of it. Gaps are fine.
+            </p>
+          )}
+          <ProposalGrid
+            dates={selectedDates}
+            times={gridTimes}
+            slotInterval={SLOT_INTERVAL}
+            proposed={proposed}
+            onChange={(update) => {
+              setProposed(update);
+              if (errors.hours) setErrors((prev) => ({ ...prev, hours: undefined }));
+            }}
+            invalid={Boolean(errors.hours)}
+            describedBy={errors.hours ? 'poll-hours-error' : undefined}
+          />
           {errors.hours && (
             <p id="poll-hours-error" role="alert" className="text-xs text-red-700 mt-1">
               {errors.hours}
             </p>
           )}
-        </div>
-
-        {/* Per-day hours */}
-        <PerDayHours
-          dates={selectedDates}
-          defaultHours={{ startHour, endHour }}
-          overrides={dayHours}
-          onChange={setHoursFor}
-          onReset={resetHoursFor}
-        />
+        </fieldset>
 
         {/* Organizer */}
         <div className="pt-2 border-t border-stone-200 grid grid-cols-1 sm:grid-cols-2 gap-3">

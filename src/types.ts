@@ -35,6 +35,9 @@ export interface Poll {
   endHour: number; // 0-24 in half-hour steps, e.g. 17
   // Optional per-date hour windows (YYYY-MM-DD -> hours); overrides startHour/endHour
   dayHours?: Record<string, DayHours>;
+  // Optional exact proposal per date (YYYY-MM-DD -> sorted "HH:mm" slot starts).
+  // May contain gaps. When present it replaces startHour/endHour/dayHours for slots.
+  proposedSlots?: Record<string, string[]>;
   slotInterval: 15 | 30; // grid granularity in minutes
   creatorName: string;
   creatorEmail?: string;

@@ -7,6 +7,7 @@ import { getBlockStatus, type GridInterval } from '../utils/grid';
 import { SLOT_STATUS_CLASS, SLOT_STATUS_LABEL } from '../utils/slotStyles';
 import { getStoredUser, setStoredUser } from '../utils/storage';
 import { usePollGrid } from '../hooks/usePollGrid';
+import { useGridStroke } from '../hooks/useGridStroke';
 import { SlotTable } from './SlotTable';
 
 interface AvailabilityPainterProps {
@@ -87,20 +88,8 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const [nameError, setNameError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [matchedParticipantId, setMatchedParticipantId] = useState<string | undefined>(undefined);
-  const [isPainting, setIsPainting] = useState(false);
 
   // ─── Refs ───
-  // The value one drag stroke writes; null when no stroke is in progress.
-  const strokeRef = useRef<SlotStatus | null>(null);
-  // Where the stroke started, whether that cell already held the brush, and
-  // whether the stroke ever reached a different cell. Together these turn a
-  // single click on an already-brushed cell into "clear", while a drag only paints.
-  const strokeOriginRef = useRef<string | null>(null);
-  const strokeOriginHadBrushRef = useRef(false);
-  const strokeMovedRef = useRef(false);
-  // Last cell the stroke painted. Pointer events are not fired for every cell a
-  // fast pointer crosses, so each step fills the range from here to the new cell.
-  const strokeLastRef = useRef<string | null>(null);
   // Which participant's saved answers are currently loaded into the grid.
   const loadedParticipantIdRef = useRef<string | undefined>(undefined);
   // The one pending timer: clearing the save error.
@@ -170,135 +159,53 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     });
   };
 
-  // Every block key in the rectangle spanned by two cells (dates x rows).
-  const blockKeysBetween = (fromKey: string, toKey: string): string[] => {
-    const from = blocks.get(fromKey);
-    const to = blocks.get(toKey);
-    if (!from || !to) return to ? [toKey] : [];
-    const dateA = poll.dates.indexOf(from.date);
-    const dateB = poll.dates.indexOf(to.date);
-    const timeA = timeSlots.indexOf(from.startTime);
-    const timeB = timeSlots.indexOf(to.startTime);
-    if (dateA < 0 || dateB < 0 || timeA < 0 || timeB < 0) return [toKey];
-    const keys: string[] = [];
-    for (let d = Math.min(dateA, dateB); d <= Math.max(dateA, dateB); d++) {
-      for (let t = Math.min(timeA, timeB); t <= Math.max(timeA, timeB); t++) {
-        const key = slotKey(poll.dates[d], timeSlots[t]);
-        if (blocks.has(key)) keys.push(key);
-      }
-    }
-    return keys;
+  // Answers with every atomic slot under these blocks set to one status.
+  const withBlocks = (base: Record<string, SlotStatus>, keys: string[], status: SlotStatus) => {
+    const next = { ...base };
+    keys.forEach((key) => {
+      const block = blocks.get(key);
+      block?.slotTimes.forEach((time) => {
+        next[slotKey(block.date, time)] = status;
+      });
+    });
+    return next;
   };
 
-  const setBlocks = (keys: string[], status: SlotStatus) => {
-    setAvailability((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      keys.forEach((key) => {
-        const block = blocks.get(key);
-        block?.slotTimes.forEach((time) => {
-          const atomicKey = slotKey(block.date, time);
-          if (next[atomicKey] !== status) {
-            next[atomicKey] = status;
-            changed = true;
-          }
-        });
-      });
-      return changed ? next : prev;
-    });
-  };
+  const setBlocks = (keys: string[], status: SlotStatus) =>
+    setAvailability((prev) => withBlocks(prev, keys, status));
 
   const setBlock = (key: string, status: SlotStatus) => setBlocks([key], status);
 
-  const applyStroke = (key: string) => {
-    const value = strokeRef.current;
-    if (!value) return;
-    if (key === strokeLastRef.current) return;
-    if (key !== strokeOriginRef.current) strokeMovedRef.current = true;
-    const from = strokeLastRef.current ?? key;
-    strokeLastRef.current = key;
-    setBlocks(blockKeysBetween(from, key), value);
-  };
+  // ─── Stroke ───
+  // A single click on a cell that already holds the brush clears it; a drag only
+  // paints. The brush, that origin state and the answers the rectangle is drawn
+  // over are fixed when the stroke begins.
+  const strokeBrushRef = useRef<SlotStatus>(activeBrush);
+  const strokeOriginHadBrushRef = useRef(false);
+  const strokeBaseRef = useRef<Record<string, SlotStatus>>({});
 
-  // ─── Stroke lifecycle ───
-  // Ending on window means releasing outside the grid, opening a context menu or
-  // losing the window never leaves a stroke stuck.
-  useEffect(() => {
-    if (!isPainting) return;
-    const endStroke = () => {
-      const origin = strokeOriginRef.current;
-      // A click that never left its cell, on a cell that already held the brush,
-      // clears the answer instead of repainting it.
-      if (origin && !strokeMovedRef.current && strokeOriginHadBrushRef.current) {
-        clearBlock(origin);
-      }
-      strokeRef.current = null;
-      strokeOriginRef.current = null;
-      strokeOriginHadBrushRef.current = false;
-      strokeMovedRef.current = false;
-      strokeLastRef.current = null;
-      setIsPainting(false);
-    };
-    window.addEventListener('pointerup', endStroke);
-    window.addEventListener('pointercancel', endStroke);
-    window.addEventListener('contextmenu', endStroke);
-    window.addEventListener('blur', endStroke);
-    return () => {
-      window.removeEventListener('pointerup', endStroke);
-      window.removeEventListener('pointercancel', endStroke);
-      window.removeEventListener('contextmenu', endStroke);
-      window.removeEventListener('blur', endStroke);
-    };
-  }, [isPainting]);
-
-  // A display interval change replaces the block map while a pointer stroke may
-  // still be held. Cancel the stroke without applying its click-to-clear action;
-  // otherwise the old block key could clear the newly grouped answer on pointerup.
-  useEffect(() => {
-    strokeRef.current = null;
-    strokeOriginRef.current = null;
-    strokeOriginHadBrushRef.current = false;
-    strokeMovedRef.current = false;
-    strokeLastRef.current = null;
-    setIsPainting(false);
-  }, [effectiveGridInterval, poll.id]);
-
-  const handleCellPointerDown = (e: React.PointerEvent<HTMLButtonElement>, key: string) => {
-    if (isSaving) return;
-    // Left button only; a right-click or middle-click must not start painting.
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (e.pointerType !== 'mouse' && e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
-    // Touch pointers are implicitly captured by the origin element; release so the
-    // grid-level pointermove hit-testing can paint across neighbouring cells.
-    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-    const block = blocks.get(key);
-    const hadBrush = block ? getBlockStatus(availability, block) === activeBrush : false;
-    strokeRef.current = activeBrush;
-    strokeOriginRef.current = key;
-    strokeOriginHadBrushRef.current = hadBrush;
-    strokeMovedRef.current = false;
-    strokeLastRef.current = key;
-    setIsPainting(true);
-    if (!hadBrush) setBlock(key, activeBrush);
-  };
-
-  const handleCellPointerEnter = (e: React.PointerEvent<HTMLButtonElement>, key: string) => {
-    if (isSaving) return;
-    if (e.pointerType === 'mouse' && strokeRef.current) applyStroke(key);
-  };
-
-  // Touch and pen do not fire pointerenter on the elements they pass over, so the
-  // grid hit-tests the pointer position itself.
-  const handleGridPointerMove = (e: React.PointerEvent<HTMLTableElement>) => {
-    if (isSaving) return;
-    if (!strokeRef.current || e.pointerType === 'mouse') return;
-    const target = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = target?.closest('[data-slot-key]');
-    const key = cell?.getAttribute('data-slot-key');
-    if (key) applyStroke(key);
-  };
+  const stroke = useGridStroke({
+    dates: poll.dates,
+    times: timeSlots,
+    hasCell: (key) => blocks.has(key),
+    disabled: isSaving,
+    onBegin: (key) => {
+      const block = blocks.get(key);
+      strokeBrushRef.current = activeBrush;
+      strokeBaseRef.current = availability;
+      strokeOriginHadBrushRef.current = block ? getBlockStatus(availability, block) === activeBrush : false;
+    },
+    onPaint: (keys, isOrigin) => {
+      if (isOrigin && strokeOriginHadBrushRef.current) return;
+      setAvailability(withBlocks(strokeBaseRef.current, keys, strokeBrushRef.current));
+    },
+    onEnd: (origin, moved) => {
+      if (!moved && strokeOriginHadBrushRef.current) clearBlock(origin);
+    },
+    // A display interval change replaces the block map mid-stroke: cancel it
+    // rather than let the old origin key clear a newly grouped answer.
+    resetKey: `${effectiveGridInterval}:${poll.id}`,
+  });
 
   const handleCellKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, key: string) => {
     if (isSaving) return;
@@ -426,8 +333,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
         aria-label={cellLabel}
         title={cellLabel}
         aria-pressed={status !== 'none'}
-        onPointerDown={(e) => handleCellPointerDown(e, key)}
-        onPointerEnter={(e) => handleCellPointerEnter(e, key)}
+        {...stroke.cellProps(key)}
         onKeyDown={(e) => handleCellKeyDown(e, key)}
         className={`w-full h-10 rounded-lg border flex items-center justify-center transition-colors cursor-pointer ${styleClass}`}
       >
@@ -610,14 +516,14 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
         </div>
 
         <SlotTable
-          poll={poll}
+          dates={poll.dates}
           timeSlots={timeSlots}
           isProposed={isProposed}
           dateHeadings={dateHeadings}
           renderHeader={renderDayHeader}
           renderCell={renderSlotCell}
           cellHeightClass="h-10"
-          tableProps={{ onPointerMove: handleGridPointerMove }}
+          tableProps={stroke.tableProps}
         />
       </div>
     </div>

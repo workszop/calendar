@@ -28,13 +28,22 @@ export function usePollGrid(poll: Poll, gridInterval?: GridInterval): PollGrid {
     const blocks = new Map<string, GridBlock>();
     const slotsPerBlock = (gridInterval ?? poll.slotInterval) / poll.slotInterval;
     daySlots.forEach((slots, date) => {
-      const times = [...slots];
-      for (let index = 0; index < times.length; index += slotsPerBlock) {
-        const slotTimes = times.slice(index, index + slotsPerBlock);
+      // Group consecutive slots; a gap in the proposal always closes a block.
+      let slotTimes: string[] = [];
+      const flush = () => {
+        if (!slotTimes.length) return;
         const startTime = slotTimes[0];
         const endTime = addMinutesToTime(slotTimes[slotTimes.length - 1], poll.slotInterval);
         blocks.set(slotKey(date, startTime), { date, startTime, endTime, slotTimes });
-      }
+        slotTimes = [];
+      };
+      [...slots].forEach((time) => {
+        const previous = slotTimes[slotTimes.length - 1];
+        if (previous && addMinutesToTime(previous, poll.slotInterval) !== time) flush();
+        slotTimes.push(time);
+        if (slotTimes.length === slotsPerBlock) flush();
+      });
+      flush();
     });
     const timeSlots = [...new Set([...blocks.values()].map((block) => block.startTime))].sort();
     const dateHeadings = new Map(poll.dates.map((date) => [date, formatDateHeading(date)]));

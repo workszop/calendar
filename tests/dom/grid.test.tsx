@@ -43,4 +43,13 @@ describe('grid display intervals', () => {
     expect(result.current.timeSlots).toEqual(['09:00']);
     expect(result.current.blocks.get('2026-10-01T09:00')?.slotTimes).toEqual(['09:00', '09:15', '09:30', '09:45']);
   });
+  it('closes an hourly block at a gap in proposed slots', () => {
+    const { result } = renderHook(() => usePollGrid({
+      ...poll, proposedSlots: { '2026-10-01': ['09:30', '10:00', '10:30', '13:00'] },
+    }, 60));
+    expect([...result.current.blocks.values()].map((b) => b.slotTimes)).toEqual([
+      ['09:30', '10:00'], ['10:30'], ['13:00'],
+    ]);
+    expect(result.current.isProposed('2026-10-01', '11:00')).toBe(false);
+  });
 });

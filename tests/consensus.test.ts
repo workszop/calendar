@@ -134,6 +134,37 @@ describe('per-day hours', () => {
   });
 });
 
+describe('proposed slots with gaps', () => {
+  const gappy: Poll = {
+    ...poll,
+    dates: ['2026-10-01', '2026-10-02'],
+    startHour: 9,
+    endHour: 15,
+    proposedSlots: {
+      '2026-10-01': ['09:00', '09:30', '14:00', '14:30'],
+      '2026-10-02': ['10:00'],
+    },
+    participants: [],
+  };
+
+  it('uses exactly the proposed slots per date', async () => {
+    const { generateDaySlots, getDayHours } = await import('../src/utils/consensus');
+    expect(generateDaySlots(gappy, '2026-10-01')).toEqual(['09:00', '09:30', '14:00', '14:30']);
+    expect(generateDaySlots(gappy, '2026-10-02')).toEqual(['10:00']);
+    expect(getDayHours(gappy, '2026-10-01')).toEqual({ startHour: 9, endHour: 15 });
+  });
+
+  it('never builds a meeting window across a gap', async () => {
+    const { getMeetingWindow } = await import('../src/utils/consensus');
+    expect(getMeetingWindow(gappy, '2026-10-01', '09:00')?.endTime).toBe('10:00');
+    // 09:30 + 60 min would need 10:00, which is not proposed.
+    expect(getMeetingWindow(gappy, '2026-10-01', '09:30')).toBeNull();
+    expect(getMeetingWindow(gappy, '2026-10-02', '10:00')).toBeNull();
+    const starts = findBestMeetingWindows(gappy).map((w) => `${w.date}T${w.startTime}`);
+    expect(starts).toEqual(['2026-10-01T09:00', '2026-10-01T14:00']);
+  });
+});
+
 describe('isValidHourWindow', () => {
   it('accepts whole and half hours inside 0-24 with start before end', () => {
     expect(isValidHourWindow(9, 17)).toBe(true);
