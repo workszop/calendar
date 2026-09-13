@@ -172,6 +172,28 @@ describe('AvailabilityPainter display interval', () => {
     });
   });
 
+  it('fills cells a fast drag skipped over', async () => {
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(makePoll(), 30, onSaveAvailability);
+
+    // The pointer jumps from 09:00 straight to 10:30; 09:30 and 10:00 never get an event.
+    fireEvent.pointerDown(cell('09:00'), { pointerId: 1, pointerType: 'mouse', button: 0 });
+    // React derives pointerenter from pointerout; jsdom has no PointerEvent, so
+    // pointerType is attached by hand.
+    const out = new MouseEvent('pointerout', { bubbles: true, relatedTarget: cell('10:30') });
+    Object.defineProperty(out, 'pointerType', { value: 'mouse' });
+    fireEvent(cell('09:00'), out);
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'mouse', button: 0 });
+
+    await savePainter();
+    expect(onSaveAvailability.mock.calls[0]?.[2]).toEqual({
+      [key('09:00')]: 'available',
+      [key('09:30')]: 'available',
+      [key('10:00')]: 'available',
+      [key('10:30')]: 'available',
+    });
+  });
+
   it('supports keyboard painting and clearing for an hourly block', () => {
     renderPainter(makePoll({ endHour: 10 }), 60);
     const block = cell('09:00');

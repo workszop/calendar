@@ -264,6 +264,11 @@ export default function App() {
     didInit.current = true;
 
     const init = async () => {
+      // Arriving through a shared ?poll= link means "answer this poll", so open
+      // the painter instead of the heatmap.
+      if (new URLSearchParams(window.location.search).get('poll')) {
+        setActiveTab('painter');
+      }
       const list = await fetchPollsList();
       await resolveInitialPoll('push', list);
     };

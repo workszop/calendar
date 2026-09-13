@@ -98,6 +98,9 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const strokeOriginRef = useRef<string | null>(null);
   const strokeOriginHadBrushRef = useRef(false);
   const strokeMovedRef = useRef(false);
+  // Last cell the stroke painted. Pointer events are not fired for every cell a
+  // fast pointer crosses, so each step fills the range from here to the new cell.
+  const strokeLastRef = useRef<string | null>(null);
   // Which participant's saved answers are currently loaded into the grid.
   const loadedParticipantIdRef = useRef<string | undefined>(undefined);
   // The one pending timer: clearing the save error.
@@ -150,23 +153,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     saveErrorTimerRef.current = setTimeout(() => setSaveError(null), SAVE_ERROR_TIMEOUT_MS);
   };
 
-  const setBlock = (key: string, status: SlotStatus) => {
-    const block = blocks.get(key);
-    if (!block) return;
-    setAvailability((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      block.slotTimes.forEach((time) => {
-        const atomicKey = slotKey(block.date, time);
-        if (next[atomicKey] !== status) {
-          next[atomicKey] = status;
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-  };
-
   const clearBlock = (key: string) => {
     const block = blocks.get(key);
     if (!block) return;
@@ -184,11 +170,54 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     });
   };
 
+  // Every block key in the rectangle spanned by two cells (dates x rows).
+  const blockKeysBetween = (fromKey: string, toKey: string): string[] => {
+    const from = blocks.get(fromKey);
+    const to = blocks.get(toKey);
+    if (!from || !to) return to ? [toKey] : [];
+    const dateA = poll.dates.indexOf(from.date);
+    const dateB = poll.dates.indexOf(to.date);
+    const timeA = timeSlots.indexOf(from.startTime);
+    const timeB = timeSlots.indexOf(to.startTime);
+    if (dateA < 0 || dateB < 0 || timeA < 0 || timeB < 0) return [toKey];
+    const keys: string[] = [];
+    for (let d = Math.min(dateA, dateB); d <= Math.max(dateA, dateB); d++) {
+      for (let t = Math.min(timeA, timeB); t <= Math.max(timeA, timeB); t++) {
+        const key = slotKey(poll.dates[d], timeSlots[t]);
+        if (blocks.has(key)) keys.push(key);
+      }
+    }
+    return keys;
+  };
+
+  const setBlocks = (keys: string[], status: SlotStatus) => {
+    setAvailability((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      keys.forEach((key) => {
+        const block = blocks.get(key);
+        block?.slotTimes.forEach((time) => {
+          const atomicKey = slotKey(block.date, time);
+          if (next[atomicKey] !== status) {
+            next[atomicKey] = status;
+            changed = true;
+          }
+        });
+      });
+      return changed ? next : prev;
+    });
+  };
+
+  const setBlock = (key: string, status: SlotStatus) => setBlocks([key], status);
+
   const applyStroke = (key: string) => {
     const value = strokeRef.current;
     if (!value) return;
+    if (key === strokeLastRef.current) return;
     if (key !== strokeOriginRef.current) strokeMovedRef.current = true;
-    setBlock(key, value);
+    const from = strokeLastRef.current ?? key;
+    strokeLastRef.current = key;
+    setBlocks(blockKeysBetween(from, key), value);
   };
 
   // ─── Stroke lifecycle ───
@@ -207,6 +236,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
       strokeOriginRef.current = null;
       strokeOriginHadBrushRef.current = false;
       strokeMovedRef.current = false;
+      strokeLastRef.current = null;
       setIsPainting(false);
     };
     window.addEventListener('pointerup', endStroke);
@@ -229,6 +259,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     strokeOriginRef.current = null;
     strokeOriginHadBrushRef.current = false;
     strokeMovedRef.current = false;
+    strokeLastRef.current = null;
     setIsPainting(false);
   }, [effectiveGridInterval, poll.id]);
 
@@ -248,6 +279,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     strokeOriginRef.current = key;
     strokeOriginHadBrushRef.current = hadBrush;
     strokeMovedRef.current = false;
+    strokeLastRef.current = key;
     setIsPainting(true);
     if (!hadBrush) setBlock(key, activeBrush);
   };

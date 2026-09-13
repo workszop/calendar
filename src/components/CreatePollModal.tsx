@@ -91,7 +91,8 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
     setEndHour(DEFAULT_END_HOUR);
     setCreatorName(stored.name);
     setCreatorEmail(stored.email);
-    setSelectedDates(getNextDates(3));
+    // No dates are preselected: the organizer picks them (or uses a preset).
+    setSelectedDates([]);
     setDayHours({});
     setViewMonth(startOfMonth(new Date()));
     setErrors({});
