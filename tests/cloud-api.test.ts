@@ -71,7 +71,7 @@ const request = async (base: string, method: string, route: string, body?: unkno
 
 const createBody = (title: string) => ({
   title,
-  dates: ["2027-03-01"],
+  dates: ["2099-03-01"],
   durationMinutes: 30,
   timezone: "UTC",
   creatorName: "Organizer",
@@ -126,13 +126,13 @@ describe("cloud PollStore API", () => {
     const pollId = created.json.id as string;
     const response = await request(api.base, "POST", `/api/polls/${pollId}/respond`, {
       name: "Ada",
-      availability: { "2027-03-01T09:00": "preferred" },
+      availability: { "2099-03-01T09:00": "preferred" },
     });
     expect(response.response.status).toBe(200);
     const participantId = response.json.participant.id as string;
 
     const finalized = await request(api.base, "POST", `/api/polls/${pollId}/finalize`, {
-      date: "2027-03-01",
+      date: "2099-03-01",
       startTime: "09:00",
       endTime: "09:30",
     });

@@ -95,13 +95,13 @@ describe('Netlify deployment contract', () => {
 
   it('persists creation and answers across requests using the real Blobs SDK', async () => {
     const created = await invoke('POST', '/api/polls', {
-      title: 'Cloud scheduling test', dates: ['2026-10-01'], durationMinutes: 45,
+      title: 'Cloud scheduling test', dates: ['2099-10-01'], durationMinutes: 45,
       startHour: 9, endHour: 10.5,
     });
     expect(created.status).toBe(201);
     const poll = await created.json();
     const answered = await invoke('POST', `/.netlify/functions/api/polls/${poll.id}/respond`, {
-      name: 'Test participant', availability: { '2026-10-01T09:00': 'available', '2026-10-01T09:30': 'preferred' },
+      name: 'Test participant', availability: { '2099-10-01T09:00': 'available', '2099-10-01T09:30': 'preferred' },
     });
     expect(answered.status).toBe(200);
     const reloaded = await invoke('GET', `/api/polls/${poll.id}?fresh=1`);
@@ -126,7 +126,7 @@ describe('Netlify deployment contract', () => {
   it('isolates preview data from the production store', async () => {
     vi.stubEnv('CONTEXT', 'deploy-preview');
     vi.stubEnv('DEPLOY_ID', 'preview-123');
-    const created = await invoke('POST', '/api/polls', { title: 'Preview only', dates: ['2026-10-01'] });
+    const created = await invoke('POST', '/api/polls', { title: 'Preview only', dates: ['2099-10-01'] });
     expect(created.status).toBe(201);
     vi.stubEnv('CONTEXT', 'production');
     expect(await (await invoke('GET', '/api/polls')).json()).toEqual([]);
@@ -135,9 +135,31 @@ describe('Netlify deployment contract', () => {
   it('fails clearly without storage credentials, never falls back to a local file', async () => {
     setEnvironmentContext({});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const response = await invoke('POST', '/api/polls', { title: 'Cannot save', dates: ['2026-10-01'] });
+    const response = await invoke('POST', '/api/polls', { title: 'Cannot save', dates: ['2099-10-01'] });
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: 'Meeting storage is unavailable. Please try again later.' });
     expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it('runs a daily scheduled cleanup that deletes expired polls from Blobs', async () => {
+    const cleanupFile = path.resolve('netlify/functions/cleanup-polls.ts');
+    const { default: cleanup, config } = await import(/* @vite-ignore */ cleanupFile);
+    expect(config).toEqual({ schedule: '@daily' });
+
+    const store = getStore({ name: 'calendar-polls', consistency: 'strong' });
+    const base = { description: '', durationMinutes: 30, timezone: 'UTC', startHour: 9, endHour: 10,
+      slotInterval: 30, creatorName: 'Ada', createdAt: '', finalizedSlot: null, participants: [] };
+    await store.setJSON('polls', [
+      { ...base, id: 'expired', title: 'Expired', dates: ['2020-01-01'] },
+      { ...base, id: 'kept', title: 'Kept', dates: ['2099-10-01'] },
+    ]);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const response = await cleanup(new Request('https://calendar.example/.netlify/functions/cleanup-polls', {
+      method: 'POST', body: JSON.stringify({ next_run: '2099-01-01T00:00:00Z' }),
+    }));
+    expect(response.status).toBe(204);
+    const durable = await store.get('polls', { type: 'json' });
+    expect(durable.map((p: { id: string }) => p.id)).toEqual(['kept']);
   });
 });

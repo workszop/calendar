@@ -2,6 +2,7 @@ import express from "express";
 import type { DayHours, Poll, ParticipantResponse, PollSummary, SlotStatus } from "../src/types";
 import { generateDaySlots, getDayHours, getMeetingWindow, isHalfHourValue, isValidHourWindow } from "../src/utils/consensus";
 import { createFilePollStore, type PollStore } from "./poll-store";
+import { isPollExpired, RETENTION_DAYS, withRetention, type Clock } from "./retention";
 
 // ─── Validation primitives ───
 
@@ -140,8 +141,13 @@ export function parseAvailability(input: unknown): ParsedAvailability {
   return { ok: true, value };
 }
 
+export interface ApiOptions {
+  /** Current time for poll retention; tests pin it so fixture dates never expire. */
+  clock?: Clock;
+}
+
 /** Builds the JSON API. A string keeps the original file-backed API; a PollStore enables cloud storage. */
-export function createApi(source: string | PollStore) {
+export function createApi(source: string | PollStore, options: ApiOptions = {}) {
   const app = express();
   app.use("/api", (_req, res, next) => {
     res.set("Cache-Control", "no-store");
@@ -150,7 +156,12 @@ export function createApi(source: string | PollStore) {
   app.use(express.json({ limit: "5mb" }));
 
   // ─── Storage ───
-  const pollStore = typeof source === "string" ? createFilePollStore(source) : source;
+  // Polls past their retention window are hidden from reads and dropped on writes.
+  const clock = options.clock ?? (() => new Date());
+  const pollStore = withRetention(
+    typeof source === "string" ? createFilePollStore(source) : source,
+    clock
+  );
 
   /** Wraps an async handler so rejections still produce a JSON 500. */
   const wrap =
@@ -305,6 +316,14 @@ export function createApi(source: string | PollStore) {
         finalizedSlot: null,
         participants: [],
       };
+
+      // A poll that would be deleted immediately is almost certainly a mistake.
+      if (isPollExpired(newPoll, clock())) {
+        res.status(400).json({
+          error: `The last date is more than ${RETENTION_DAYS} days in the past; such polls are deleted automatically.`,
+        });
+        return;
+      }
 
       await pollStore.mutate((polls) => {
         // A CAS write may have committed before its response was lost. If

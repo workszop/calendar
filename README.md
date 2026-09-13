@@ -52,6 +52,17 @@ bun run lint       # tsc --noEmit
 
 Times are shown in the browser's own timezone; polls record it for reference only.
 
+## Automatic poll cleanup
+
+A poll is deleted automatically once its last proposed date is more than
+14 days in the past (UTC calendar days: a poll ending 1 October is kept
+through 15 October). Expired polls disappear from the API immediately and are
+removed from storage on the next save. A daily sweep also deletes them: the
+`cleanup-polls` scheduled function on Netlify (production deploys only; use
+"Run now" on the Functions page to trigger it), and a startup plus 24-hour
+timer on the local server. Creating a poll that is already past that window
+is rejected. The window is `RETENTION_DAYS` in `server/retention.ts`.
+
 ## Grid view
 
 Choose **30 min** or **1 hour** above either availability grid. The choice is

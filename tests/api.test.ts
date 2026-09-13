@@ -12,7 +12,8 @@ let tmpDir: string;
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-'));
-  const app = createApi(path.join(tmpDir, 'polls.json'));
+  // Pinned clock: fixture dates must not expire as real time passes.
+  const app = createApi(path.join(tmpDir, 'polls.json'), { clock: () => new Date('2026-09-13T12:00:00Z') });
   await new Promise<void>((resolve, reject) => {
     server = app.listen(0, '127.0.0.1', () => {
       const addr = server.address();
@@ -507,6 +508,15 @@ describe('poll API', () => {
     expect(fs.readFileSync(file, 'utf-8')).toBe(beforeBody);
   });
 
+  it('rejects a poll that would already be past retention', async () => {
+    // Clock is 2026-09-13: a last date of 2026-08-29 is 15 days back.
+    const expired = await api('POST', '/api/polls', { title: 'Too old', dates: ['2026-08-20', '2026-08-29'] });
+    expect(expired.status).toBe(400);
+    expect(expired.json.error).toMatch(/14 days/);
+    const lastDay = await api('POST', '/api/polls', { title: 'Just in time', dates: ['2026-08-30'] });
+    expect(lastDay.status).toBe(201);
+  });
+
   it('deletes a poll, and 404s an unknown one', async () => {
     const poll = (await api('POST', '/api/polls', { title: 'Doomed', dates: ['2027-05-02'] })).json;
     await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Gus', availability: {} });
@@ -574,4 +584,45 @@ describe('poll API', () => {
       expect((await api('GET', '/api/polls')).status).toBe(200);
     }
   );
+});
+
+describe('poll API retention', () => {
+  it('hides and then deletes polls once their last date is past the retention window', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-retention-'));
+    const file = path.join(dir, 'polls.json');
+    let now = new Date('2026-09-13T12:00:00Z');
+    const app = createApi(file, { clock: () => now });
+    const local = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const addr = local.address();
+    const root = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
+    const call = async (method: string, url: string, body?: unknown) => {
+      const res = await fetch(root + url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, json: await res.json() };
+    };
+
+    try {
+      const short = (await call('POST', '/api/polls', { title: 'Short', dates: ['2026-09-20'] })).json;
+      const long = (await call('POST', '/api/polls', { title: 'Long', dates: ['2026-09-20', '2026-11-01'] })).json;
+
+      now = new Date('2026-10-04T23:59:00Z'); // 14 days after 2026-09-20: still kept
+      expect((await call('GET', `/api/polls/${short.id}`)).status).toBe(200);
+
+      now = new Date('2026-10-05T00:00:00Z'); // 15th day: gone from reads
+      expect((await call('GET', `/api/polls/${short.id}`)).status).toBe(404);
+      expect((await call('GET', '/api/polls')).json.map((p: { id: string }) => p.id)).toEqual([long.id]);
+      // Reads never write; the next write removes it from disk.
+      expect(fs.readFileSync(file, 'utf-8')).toContain(short.id);
+      await call('POST', `/api/polls/${long.id}/respond`, { name: 'Ivy', availability: {} });
+      expect(fs.readFileSync(file, 'utf-8')).not.toContain(short.id);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
