@@ -1,6 +1,13 @@
 import express from "express";
 import type { DayHours, Poll, ParticipantResponse, PollSummary, SlotStatus } from "../src/types";
-import { generateDaySlots, getDayHours, getMeetingWindow, isHalfHourValue, isValidHourWindow } from "../src/utils/consensus";
+import {
+  generateDaySlots,
+  generateTimeSlots,
+  getDayHours,
+  getMeetingWindow,
+  isHalfHourValue,
+  isValidHourWindow,
+} from "../src/utils/consensus";
 import { createFilePollStore, type PollStore } from "./poll-store";
 import { isPollExpired, RETENTION_DAYS, withRetention, type Clock } from "./retention";
 
@@ -115,6 +122,15 @@ export function parseProposedSlots(input: unknown, dates: string[], slotInterval
     value[date] = [...new Set(times as string[])].sort();
   }
   return { ok: true, value };
+}
+
+/** Outer hour window covering every proposed slot, e.g. 09:00 and 14:00 at 30 min -> 9 to 14.5. */
+function proposalSpan(slots: Record<string, string[]>, slotInterval: number): { startHour: number; endHour: number } {
+  const minutes = Object.values(slots).flat().map(timeToMinutes);
+  return {
+    startHour: Math.min(...minutes) / 60,
+    endHour: (Math.max(...minutes) + slotInterval) / 60,
+  };
 }
 
 export type ParsedAvailability =
@@ -291,9 +307,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           return;
         }
         // Keep the poll-wide window equal to the proposal's outer span.
-        const allTimes = Object.values(proposedSlots.value).flat().map(timeToMinutes);
-        startHour = Math.min(...allTimes) / 60;
-        endHour = (Math.max(...allTimes) + slotInterval) / 60;
+        ({ startHour, endHour } = proposalSpan(proposedSlots.value, slotInterval));
       }
 
       const id = "poll_" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
@@ -335,6 +349,84 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return newPoll;
       });
       res.status(201).json(newPoll);
+    })
+  );
+
+  // ─── Routes: extend ───
+
+  // Adds candidate dates to an existing poll. Existing dates and answers are
+  // untouched. A poll stays in hour-window form while the new days use its
+  // default window; otherwise it switches to exact per-date slots.
+  app.post(
+    "/api/polls/:id/dates",
+    wrap(async (req, res) => {
+      const body = req.body ?? {};
+      if (!Array.isArray(body.dates) || body.dates.length === 0) {
+        res.status(400).json({ error: "Choose at least one date to add." });
+        return;
+      }
+      const badDate = (body.dates as unknown[]).find((d) => !isCalendarDate(d));
+      if (badDate !== undefined) {
+        res.status(400).json({ error: `Invalid date "${String(badDate)}" - expected YYYY-MM-DD.` });
+        return;
+      }
+      const newDates = [...new Set(body.dates as string[])].sort();
+      // One day of slack: the browser's "today" may still be yesterday in UTC.
+      const earliest = new Date(clock());
+      earliest.setUTCDate(earliest.getUTCDate() - 1);
+      const pastDate = newDates.find((d) => d < earliest.toISOString().slice(0, 10));
+      if (pastDate) {
+        res.status(400).json({ error: `${pastDate} is in the past.` });
+        return;
+      }
+
+      let failure: { status: number; error: string } | null = null;
+
+      const poll = await pollStore.mutate((polls) => {
+        failure = null;
+        const found = polls.find((candidate) => candidate.id === req.params.id);
+        if (!found) return null;
+        const reject = (status: number, error: string) => {
+          failure = { status, error };
+          return null;
+        };
+
+        if (found.finalizedSlot) {
+          return reject(409, "Re-open voting before adding dates.");
+        }
+        const duplicate = newDates.find((d) => found.dates.includes(d));
+        if (duplicate) return reject(400, `${duplicate} is already one of the poll dates.`);
+        const parsed = parseProposedSlots(body.proposedSlots, newDates, found.slotInterval);
+        if (!parsed.ok) return reject(400, parsed.error);
+        if (!parsed.value) return reject(400, "proposedSlots is required: list the times for each new date.");
+        const added = parsed.value;
+
+        const defaultSlots = generateTimeSlots(found.startHour, found.endHour, found.slotInterval).join();
+        const fitsWindow = newDates.every((d) => added[d].join() === defaultSlots);
+
+        if (found.proposedSlots || !fitsWindow) {
+          // Freeze the existing dates' slots exactly as participants saw them.
+          const existing = found.proposedSlots
+            ? found.proposedSlots
+            : Object.fromEntries(found.dates.map((d) => [d, generateDaySlots(found, d)]));
+          found.proposedSlots = { ...existing, ...added };
+          found.dayHours = undefined;
+          Object.assign(found, proposalSpan(found.proposedSlots, found.slotInterval));
+        }
+        found.dates = [...found.dates, ...newDates].sort();
+        return found;
+      });
+
+      if (failure) {
+        const { status, error } = failure as { status: number; error: string };
+        res.status(status).json({ error });
+        return;
+      }
+      if (!poll) {
+        res.status(404).json({ error: "Poll not found" });
+        return;
+      }
+      res.json(poll);
     })
   );
 

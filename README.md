@@ -52,6 +52,14 @@ bun run lint       # tsc --noEmit
 
 Times are shown in the browser's own timezone; polls record it for reference only.
 
+## Adding dates to a poll
+
+**Add dates** (next to "Organized by") proposes more candidate dates for an
+open poll, with the same hour range and drag grid as New Poll. Existing dates
+and answers are unchanged. It is hidden once a time is locked; re-open voting
+first. Like other edits, it is available to anyone with access to the app.
+Adding later dates also pushes back the poll's automatic cleanup.
+
 ## Automatic poll cleanup
 
 A poll is deleted automatically once its last proposed date is more than

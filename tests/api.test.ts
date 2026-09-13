@@ -517,6 +517,73 @@ describe('poll API', () => {
     expect(lastDay.status).toBe(201);
   });
 
+  it('adds dates in the default window without changing the poll format or answers', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Extend', dates: ['2026-10-05'], startHour: 9, endHour: 10 })).json;
+    await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Jo', availability: { '2026-10-05T09:00': 'available' } });
+
+    const res = await api('POST', `/api/polls/${poll.id}/dates`, {
+      dates: ['2026-10-07', '2026-10-06'],
+      proposedSlots: { '2026-10-06': ['09:00', '09:30'], '2026-10-07': ['09:30', '09:00'] },
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.dates).toEqual(['2026-10-05', '2026-10-06', '2026-10-07']);
+    expect(res.json.proposedSlots).toBeUndefined();
+    expect(res.json.participants[0].availability).toEqual({ '2026-10-05T09:00': 'available' });
+
+    // The new day is immediately answerable.
+    const answer = await api('POST', `/api/polls/${poll.id}/respond`, {
+      name: 'Jo',
+      availability: { '2026-10-05T09:00': 'available', '2026-10-07T09:30': 'preferred' },
+    });
+    expect(answer.status).toBe(200);
+  });
+
+  it('switches to exact slots when new dates differ, freezing existing dates as they were', async () => {
+    const poll = (
+      await api('POST', '/api/polls', {
+        title: 'Freeze',
+        dates: ['2026-10-05', '2026-10-06'],
+        startHour: 9,
+        endHour: 10,
+        dayHours: { '2026-10-06': { startHour: 13, endHour: 14 } },
+      })
+    ).json;
+
+    const res = await api('POST', `/api/polls/${poll.id}/dates`, {
+      dates: ['2026-10-08'],
+      proposedSlots: { '2026-10-08': ['16:00'] },
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.proposedSlots).toEqual({
+      '2026-10-05': ['09:00', '09:30'],
+      '2026-10-06': ['13:00', '13:30'],
+      '2026-10-08': ['16:00'],
+    });
+    expect(res.json.dayHours).toBeUndefined();
+    expect(res.json).toMatchObject({ startHour: 9, endHour: 16.5 });
+  });
+
+  it('rejects bad extensions', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Guarded', dates: ['2026-10-05'] })).json;
+    const add = (body: unknown) => api('POST', `/api/polls/${poll.id}/dates`, body);
+
+    expect((await add({})).status).toBe(400);
+    expect((await add({ dates: ['2026-13-01'], proposedSlots: {} })).status).toBe(400);
+    const duplicate = await add({ dates: ['2026-10-05'], proposedSlots: { '2026-10-05': ['09:00'] } });
+    expect(duplicate.status).toBe(400);
+    expect(duplicate.json.error).toMatch(/already/);
+    // Clock is 2026-09-13; one day of slack for timezones.
+    expect((await add({ dates: ['2026-09-11'], proposedSlots: { '2026-09-11': ['09:00'] } })).status).toBe(400);
+    expect((await add({ dates: ['2026-09-12'], proposedSlots: { '2026-09-12': ['09:00'] } })).status).toBe(200);
+    expect((await add({ dates: ['2026-10-20'], proposedSlots: { '2026-10-20': [] } })).status).toBe(400);
+    expect((await add({ dates: ['2026-10-21'] })).status).toBe(400);
+    expect((await api('POST', '/api/polls/nope/dates', { dates: ['2026-10-22'], proposedSlots: { '2026-10-22': ['09:00'] } })).status).toBe(404);
+
+    await api('POST', `/api/polls/${poll.id}/finalize`, { date: '2026-10-05', startTime: '09:00', endTime: '09:30' });
+    const locked = await add({ dates: ['2026-10-23'], proposedSlots: { '2026-10-23': ['09:00'] } });
+    expect(locked.status).toBe(409);
+  });
+
   it('deletes a poll, and 404s an unknown one', async () => {
     const poll = (await api('POST', '/api/polls', { title: 'Doomed', dates: ['2027-05-02'] })).json;
     await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Gus', availability: {} });

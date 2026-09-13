@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import confetti from 'canvas-confetti';
-import { Clock, MapPin, Users, Grid, PenLine, Award, Trash2, AlertCircle } from 'lucide-react';
+import { Clock, MapPin, Users, Grid, PenLine, Award, Trash2, AlertCircle, CalendarPlus } from 'lucide-react';
 import type { Poll, PollSummary, SlotStatus } from './types';
 import { Header } from './components/Header';
 import { FinalizedBanner } from './components/FinalizedBanner';
@@ -11,6 +11,7 @@ import { ConsensusPanel } from './components/ConsensusPanel';
 import { CreatePollModal } from './components/CreatePollModal';
 import { ShareModal } from './components/ShareModal';
 import { PollListModal } from './components/PollListModal';
+import { ExtendPollModal } from './components/ExtendPollModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toast } from './components/Toast';
 import { toDateStr } from './utils/calendar';
@@ -113,6 +114,7 @@ export default function App() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isPollListModalOpen, setIsPollListModalOpen] = useState(false);
+  const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
 
   // ─── Refs ───
   const didInit = useRef(false);
@@ -436,6 +438,30 @@ export default function App() {
     }
   };
 
+  // Add candidate dates to the poll on screen. Errors propagate to the modal,
+  // which shows them inline and stays open.
+  const handleAddDates = async (dates: string[], proposedSlots: Record<string, string[]>) => {
+    if (!activePoll || activePoll.id === DRAFT_POLL_ID) return;
+    const pollId = activePoll.id;
+    const navigationRequestId = navigationRequestRef.current;
+    const res = await fetch(`/api/polls/${pollId}/dates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dates, proposedSlots }),
+    });
+    if (!res.ok) throw await readError(res, 'Failed to add dates');
+    const updated: Poll = await res.json();
+    void fetchPollsList();
+    if (
+      navigationRequestId !== navigationRequestRef.current ||
+      activePollIdRef.current !== pollId
+    ) {
+      return;
+    }
+    commitActivePoll(updated);
+    showToast(dates.length === 1 ? 'Added 1 date' : `Added ${dates.length} dates`);
+  };
+
   // Finalize meeting slot
   const handleFinalizeSlot = async (date: string, startTime: string, endTime: string) => {
     // Nothing to lock on an unsaved draft, or on a poll nobody has answered.
@@ -656,6 +682,18 @@ export default function App() {
                   </span>
 
                   <span className="text-stone-500">Organized by {poll.creatorName}</span>
+
+                  {poll.id !== DRAFT_POLL_ID && !poll.finalizedSlot && (
+                    <button
+                      type="button"
+                      id="add-dates-button"
+                      onClick={() => setIsExtendModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 transition-colors"
+                    >
+                      <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                      Add dates
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -818,6 +856,15 @@ export default function App() {
         onCreatePoll={handleCreatePoll}
         defaultTimezone={BROWSER_TIMEZONE}
       />
+
+      {poll && poll.id !== DRAFT_POLL_ID && (
+        <ExtendPollModal
+          isOpen={isExtendModalOpen}
+          onClose={() => setIsExtendModalOpen(false)}
+          poll={poll}
+          onAddDates={handleAddDates}
+        />
+      )}
 
       {poll && poll.id !== DRAFT_POLL_ID && (
         <ShareModal

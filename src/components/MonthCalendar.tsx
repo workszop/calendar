@@ -16,6 +16,8 @@ export interface MonthCalendarProps {
   /** Marks the whole grid invalid, e.g. when nothing is selected on submit. */
   invalid?: boolean;
   describedBy?: string;
+  /** Dates already taken (e.g. already in the poll): shown marked, not selectable. */
+  lockedDates?: string[];
 }
 
 // ─── Constants ───
@@ -88,6 +90,7 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({
   onViewMonthChange,
   invalid = false,
   describedBy,
+  lockedDates = [],
 }) => {
   const year = viewMonth.getFullYear();
   const month = viewMonth.getMonth();
@@ -235,7 +238,8 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({
                 // A past day that is still selected stays clickable so it can be
                 // removed. Disabled days keep focus (aria-disabled, not disabled)
                 // so arrow keys never fall into a hole.
-                const isDisabled = isPast && !isSelected;
+                const isLocked = lockedDates.includes(dateStr);
+                const isDisabled = isLocked || (isPast && !isSelected);
                 return (
                   <div key={dateStr} role="gridcell" aria-selected={isSelected}>
                     <button
@@ -245,7 +249,8 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({
                       tabIndex={dateStr === activeDate ? 0 : -1}
                       aria-disabled={isDisabled || undefined}
                       aria-pressed={isSelected}
-                      aria-label={formatDateHeading(dateStr).full}
+                      aria-label={`${formatDateHeading(dateStr).full}${isLocked ? ' (already in poll)' : ''}`}
+                      data-locked={isLocked || undefined}
                       onFocus={() => setFocusedDate(dateStr)}
                       onClick={() => {
                         if (isDisabled) return;
@@ -254,7 +259,9 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({
                       className={`w-full h-9 rounded-full text-xs font-semibold transition-colors ${
                         isSelected
                           ? 'bg-yellow-500 text-yellow-950'
-                          : isDisabled
+                          : isLocked
+                            ? 'bg-stone-200 text-stone-500 line-through cursor-not-allowed'
+                            : isDisabled
                             ? 'text-stone-300 cursor-not-allowed'
                             : 'text-stone-700 hover:bg-stone-100'
                       } ${isToday && !isSelected ? 'ring-1 ring-stone-300' : ''}`}
