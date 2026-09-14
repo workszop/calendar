@@ -64,12 +64,33 @@ function clearDay(date: string) {
 }
 
 describe('CreatePollPage', () => {
+  it('publishes the visual grouping contract for the required create sections', () => {
+    renderPage();
+
+    const meetingDetails = document.querySelector<HTMLElement>(
+      '[data-visual-group="meeting-details"]'
+    );
+    const dateSelection = document.querySelector<HTMLElement>(
+      '[data-visual-group="date-selection"]'
+    );
+    const timeSelection = document.querySelector<HTMLElement>(
+      '[data-visual-group="time-selection"]'
+    );
+
+    expect(meetingDetails).toBeTruthy();
+    expect(meetingDetails?.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(2);
+    expect(dateSelection).toBeTruthy();
+    expect(dateSelection?.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+    expect(timeSelection).toBeTruthy();
+  });
+
   it('shows name, duration and the candidate calendar in one initial view', () => {
     renderPage();
 
     expect(screen.getByLabelText(/Meeting name/)).toBeTruthy();
     expect(screen.getByRole('button', { name: '60 minutes' })).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Proposed dates' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Proposed dates' }).getAttribute('data-calendar-mode')).toBe('responsive');
     expect(screen.queryByRole('navigation', { name: 'Poll creation steps' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Choose dates/ })).toBeNull();
     expect(document.querySelector('[data-step]')).toBeNull();

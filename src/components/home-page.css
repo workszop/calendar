@@ -8,7 +8,7 @@
 }
 
 .d-shell-header-inner {
-  min-height: 68px;
+  min-height: var(--header-row-height);
   justify-content: space-between;
 }
 
@@ -68,7 +68,7 @@
 
 .d-shell-back,
 .d-shell-share {
-  min-height: 42px;
+  min-height: 44px;
   font-size: var(--ui-small, 14px);
 }
 
@@ -494,10 +494,24 @@
 }
 
 .d-home-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
   margin: 0;
   color: var(--ink);
   font-size: var(--ui-title, clamp(30px, 3vw, 42px));
   line-height: 1.1;
+}
+
+.d-home-title > svg {
+  width: 1em;
+  height: 1em;
+  color: var(--blue);
+}
+
+.d-home-create > svg {
+  width: var(--group-icon-size);
+  height: var(--group-icon-size);
 }
 
 .d-home-lead {
@@ -537,6 +551,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 12px;
+  background: var(--group-sand);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
 .d-home-segment {
@@ -585,14 +603,20 @@
 }
 
 .d-home-search input {
+  width: 100%;
   min-height: 44px;
   padding-left: 40px;
+  padding-right: 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
   background: var(--paper);
+  color: var(--ink);
   font-size: var(--ui-small, 14px);
 }
 
 .d-home-list {
-  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
 }
 
 .d-home-poll-row {
@@ -600,8 +624,10 @@
   grid-template-columns: 72px minmax(0, 1fr) 170px 150px;
   align-items: center;
   gap: 22px;
-  padding: 26px 4px;
-  border-bottom: 1px solid var(--line);
+  padding: 20px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
 
 .d-home-date-tile {
@@ -609,11 +635,17 @@
   place-items: center;
   min-height: 76px;
   padding: 9px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--group-blue-line);
+  background: var(--group-blue-tint);
   border-radius: var(--r-md, 14px);
   color: var(--ink-2);
   font-size: var(--ui-caption, 12px);
   text-align: var(--ui-center, center);
+}
+
+.d-home-poll-row[data-meeting-status='agreed'] .d-home-date-tile {
+  background: var(--group-green-tint);
+  border-color: var(--group-green-line);
 }
 
 .d-home-date-tile strong {
@@ -694,8 +726,8 @@
 }
 
 .d-home-status-pill.open {
-  background: var(--yellow);
-  color: var(--yellow-ink, var(--ink));
+  background: var(--group-blue-tint);
+  color: var(--ink);
 }
 
 .d-home-response-count {
@@ -717,8 +749,11 @@
 }
 
 .d-home-empty {
-  max-width: 640px;
-  padding: 54px 0 26px;
+  width: 100%;
+  padding: clamp(20px, 3vw, 36px);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  background: var(--group-sand);
 }
 
 .d-home-list-error {
@@ -742,6 +777,7 @@
 }
 
 .d-home-empty-symbol:hover { background: var(--yellow); }
+.d-home-empty-symbol > svg { width: var(--ui-title); height: var(--ui-title); }
 .d-home-empty-symbol:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
 
 .d-home-empty h2,
@@ -787,10 +823,6 @@
 }
 
 @media (max-width: 768px) {
-  .d-shell-header-inner {
-    min-height: 60px;
-  }
-
   .d-shell-context,
   .d-shell-agreed {
     display: none;
@@ -895,7 +927,7 @@
   .d-home-poll-row {
     grid-template-columns: 56px minmax(0, 1fr);
     gap: 12px;
-    padding: 23px 0;
+    padding: 16px;
   }
 
   .d-home-date-tile {

@@ -1,0 +1,116 @@
+/* ─── Adaptive month calendar ─── */
+.month-calendar {
+  width: 100%;
+  min-width: 0;
+}
+
+.month-calendar--responsive {
+  width: 100%;
+  max-width: 58.25rem;
+  margin-inline: 0;
+}
+
+.month-calendar__frame {
+  min-width: 0;
+}
+
+.month-calendar--responsive .month-calendar__frame {
+  width: 100%;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.month-calendar--responsive .month-calendar__frame--invalid {
+  border-color: var(--red);
+}
+
+/* Keep the one-month compact state genuinely compact without changing the
+   stable full-width box used by the ResizeObserver measurement. */
+.month-calendar--responsive[data-visible-months='1'] .month-calendar__frame {
+  width: 18.75rem;
+  max-width: 100%;
+}
+
+.month-calendar--responsive[data-visible-months='2'] .month-calendar__frame {
+  max-width: 38.5rem;
+}
+
+.month-calendar__navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.month-calendar--responsive .month-calendar__navigation {
+  margin-bottom: 0.5rem;
+}
+
+.month-calendar__nav-button {
+  flex: 0 0 auto;
+}
+
+.month-calendar__months {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: start;
+  align-items: start;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.month-calendar--responsive .month-calendar__month {
+  width: 100%;
+  max-width: 18.75rem;
+  min-width: 0;
+}
+
+.month-calendar--responsive[data-visible-months='2'] .month-calendar__months {
+  grid-template-columns: repeat(2, minmax(0, 18.75rem));
+  gap: 1rem;
+}
+
+.month-calendar--responsive[data-visible-months='3'] .month-calendar__months {
+  grid-template-columns: repeat(3, minmax(0, 18.75rem));
+}
+
+.month-calendar__month-title {
+  margin: 0 0 0.4rem;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--ui-small);
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.month-calendar__grid {
+  min-width: 0;
+}
+
+.month-calendar__grid-row {
+  min-width: 0;
+}
+
+.month-calendar__grid-row > [role='gridcell'] {
+  min-width: 0;
+}
+
+.month-calendar__weekday {
+  color: var(--ink-3);
+}
+
+.month-calendar__day {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .month-calendar--responsive .month-calendar__months,
+  .month-calendar--responsive[data-visible-months='2'] .month-calendar__months,
+  .month-calendar--responsive[data-visible-months='3'] .month-calendar__months {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, HelpCircle, Save, Star, X } from 'lucide-react';
+import { CalendarDays, Check, HelpCircle, Save, Star, X } from 'lucide-react';
 import type { Poll, SlotStatus } from '../types';
 import { formatTimeSlot } from '../utils/calendar';
 import { slotKey } from '../utils/consensus';
@@ -463,11 +463,23 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
       aria-busy={isSaving}
       data-answer-state={saveState}
     >
-      <section className="d-answer-grid" data-answer-grid aria-labelledby="answer-grid-title">
+      <section
+        className="d-answer-grid"
+        data-answer-grid
+        data-visual-group="answer-calendar"
+        aria-labelledby="answer-grid-title"
+      >
         <header className="d-answer-grid-heading">
           <div>
             <p className="d-calendar-kicker">Your availability</p>
-            <h3 id="answer-grid-title">When can you make it?</h3>
+            <h3 id="answer-grid-title">
+              <CalendarDays
+                className="d-calendar-panel-icon"
+                data-visual-icon="calendar"
+                aria-hidden="true"
+              />
+              <span>When can you make it?</span>
+            </h3>
           </div>
           <p className="d-answer-grid-note">
             Select the times that work. Each cell follows the organizer's proposal.
@@ -487,75 +499,78 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
           />
         </div>
 
-        <div className="d-answer-selection-row">
-          <span className="d-answer-selection-count" data-selection-count={Object.keys(availability).length}>
-            {Object.keys(availability).length} answered blocks · {activeBrushDef.label} selected
-          </span>
-          <button
-            type="button"
-            id="clear-selection-btn"
-            disabled={isSaving}
-            onClick={handleClearAll}
-            className="d-answer-clear-button"
-          >
-            Clear selection
-          </button>
-        </div>
-
-        <div className="d-answer-brush-row" role="radiogroup" aria-labelledby="brush-group-label">
-          <span id="brush-group-label" className="d-calendar-label">
-            Answer with
-          </span>
-          {renderBrush(BRUSHES[0], 0)}
-        </div>
-
-        <details
-          className="d-answer-disclosure"
-          open={advancedOpen}
-          onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
-        >
-          <summary>More answer options</summary>
-          <div className="d-answer-disclosure-content" role="radiogroup" aria-labelledby="brush-group-label">
-            <div className="d-answer-brush-row">{BRUSHES.slice(1).map((brush, index) => renderBrush(brush, index + 1))}</div>
-            <p className="d-answer-disclosure-note">
-              Click a cell to apply the chosen answer. Click it again to clear it.
-            </p>
-          </div>
-        </details>
-
-        <details
-          className="d-answer-disclosure"
-          open={bulkToolsOpen}
-          onToggle={(event) => setBulkToolsOpen(event.currentTarget.open)}
-        >
-          <summary>Quick fill tools</summary>
-          <div className="d-answer-disclosure-content d-answer-brush-row">
+        <div className="d-answer-controls" data-visual-group="answer-tools">
+          <div className="d-answer-selection-row">
+            <span className="d-answer-selection-count" data-selection-count={Object.keys(availability).length}>
+              {Object.keys(availability).length} answered blocks · {activeBrushDef.label} selected
+            </span>
             <button
               type="button"
-              id="fill-all-available-btn"
-              disabled={isSaving}
-              onClick={handleSelectAllAvailable}
-              className="d-answer-clear-button"
-            >
-              Select All
-            </button>
-            <button
-              type="button"
-              id="clear-all-btn"
+              id="clear-selection-btn"
               disabled={isSaving}
               onClick={handleClearAll}
               className="d-answer-clear-button"
             >
-              Clear All
+              Clear selection
             </button>
           </div>
-        </details>
+
+          <div className="d-answer-brush-row" role="radiogroup" aria-labelledby="brush-group-label">
+            <span id="brush-group-label" className="d-calendar-label">
+              Answer with
+            </span>
+            {renderBrush(BRUSHES[0], 0)}
+          </div>
+
+          <details
+            className="d-answer-disclosure"
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+          >
+            <summary>More answer options</summary>
+            <div className="d-answer-disclosure-content" role="radiogroup" aria-labelledby="brush-group-label">
+              <div className="d-answer-brush-row">{BRUSHES.slice(1).map((brush, index) => renderBrush(brush, index + 1))}</div>
+              <p className="d-answer-disclosure-note">
+                Click a cell to apply the chosen answer. Click it again to clear it.
+              </p>
+            </div>
+          </details>
+
+          <details
+            className="d-answer-disclosure"
+            open={bulkToolsOpen}
+            onToggle={(event) => setBulkToolsOpen(event.currentTarget.open)}
+          >
+            <summary>Quick fill tools</summary>
+            <div className="d-answer-disclosure-content d-answer-brush-row">
+              <button
+                type="button"
+                id="fill-all-available-btn"
+                disabled={isSaving}
+                onClick={handleSelectAllAvailable}
+                className="d-answer-clear-button"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                id="clear-all-btn"
+                disabled={isSaving}
+                onClick={handleClearAll}
+                className="d-answer-clear-button"
+              >
+                Clear All
+              </button>
+            </div>
+          </details>
+        </div>
       </section>
 
       <form
         onSubmit={handleSave}
         className="d-answer-form"
         data-answer-footer
+        data-visual-group="answer-save"
         data-save-state={saveState}
       >
         <div className="d-answer-email-flow">

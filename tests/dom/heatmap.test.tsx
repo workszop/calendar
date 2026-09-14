@@ -37,6 +37,25 @@ function makePoll(overrides: Partial<Poll> = {}): Poll {
 }
 
 describe('HeatmapGrid finalization control', () => {
+  it('publishes grouped calendar surfaces with decorative icons without changing labels', () => {
+    render(h(HeatmapGrid, {
+      poll: makePoll(),
+      gridInterval: 30,
+      activeParticipantFilter: null,
+      onSelectParticipantFilter: () => {},
+    }));
+
+    const panel = document.querySelector<HTMLElement>('[data-visual-group="calendar-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.querySelector('svg.lucide-calendar-days[aria-hidden="true"]')).not.toBeNull();
+    expect(document.querySelector('[data-visual-group="calendar-tools"]')).not.toBeNull();
+    expect(document.querySelector('[data-visual-group="selected-time"]')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Find the overlap' })).toBeTruthy();
+    expect(document.getElementById('slot-2026-10-01-09:00')?.getAttribute('aria-label')).toContain(
+      '1 of 1 available'
+    );
+  });
+
   it('keeps the selected inspector pinned while hovering another cell', () => {
     const poll = makePoll({ endHour: 11 });
     render(h(HeatmapGrid, {

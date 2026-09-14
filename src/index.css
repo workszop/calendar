@@ -105,9 +105,18 @@
   --ui-align: left; --ui-center: center; --ui-end: right;
   --page-gutter: clamp(16px, 3vw, 42px);
   --header-surface: color-mix(in srgb, var(--paper) 94%, transparent);
+  --header-logo-size: 48px;
+  --header-padding-block: 8px;
+  --header-row-height: calc(var(--header-logo-size) + 2 * var(--header-padding-block));
   --r-xs: 6px; --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 28px; --r-pill: 999px;
   --focus-ring: 0 0 0 3px color-mix(in srgb, var(--yellow) 45%, transparent);
   --scrim: color-mix(in srgb, var(--ink) 55%, transparent);
+  --group-sand: var(--paper-2);
+  --group-blue-tint: color-mix(in srgb, var(--blue) 7%, var(--surface));
+  --group-blue-line: color-mix(in srgb, var(--blue) 30%, var(--line));
+  --group-green-tint: color-mix(in srgb, var(--green) 7%, var(--surface));
+  --group-green-line: color-mix(in srgb, var(--green) 30%, var(--line));
+  --group-icon-size: 1.15rem;
 }
 
 /* ─── Base ─── */
@@ -132,10 +141,10 @@
   border-bottom: 1px solid var(--line);
 }
 .edu-header-inner {
-  width: 100%; padding: 8px var(--page-gutter);
+  width: 100%; padding: var(--header-padding-block) var(--page-gutter);
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
-.edu-logo { width: 64px; height: 64px; display: block; margin-right: -6px; }
+.edu-logo { width: var(--header-logo-size); height: var(--header-logo-size); display: block; margin-right: -6px; }
 .edu-wordmark { font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: -.02em; color: var(--ink); }
 
 .app-title {
@@ -216,10 +225,6 @@
 
   /* Dialog backdrop - warm ink instead of pure black */
   .edu-scrim { background: var(--scrim); }
-}
-
-@media (max-width: 768px) {
-  .edu-header-inner { padding-block: 4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

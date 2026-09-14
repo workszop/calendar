@@ -19,6 +19,10 @@
   justify-content: flex-end;
   gap: .75rem;
   flex-wrap: wrap;
+  padding: .45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--group-sand);
 }
 
 .d-calendar-disclosure {
@@ -33,7 +37,7 @@
   gap: .75rem;
   min-height: 2.75rem;
   padding: .65rem .85rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--ink-2);
@@ -55,6 +59,19 @@
   font-family: var(--font-sans);
   font-size: 1rem;
   font-weight: 500;
+}
+
+.d-calendar-summary-icon {
+  width: .9rem;
+  height: .9rem;
+  color: var(--blue);
+  flex: 0 0 auto;
+}
+
+.d-calendar-summary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
 }
 
 .d-calendar-disclosure[open] summary::after {
@@ -188,6 +205,8 @@
 .d-calendar-grid-panel {
   min-width: 0;
   overflow: hidden;
+  border-color: var(--group-blue-line);
+  background: var(--group-blue-tint);
 }
 
 .d-calendar-panel-heading {
@@ -196,6 +215,22 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 1.1rem 1.2rem .95rem;
+  border-bottom: 1px solid var(--group-blue-line);
+  background: var(--group-blue-tint);
+}
+
+.d-calendar-panel-heading h3,
+.d-answer-grid-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.d-calendar-panel-icon {
+  width: var(--group-icon-size);
+  height: var(--group-icon-size);
+  color: var(--blue);
+  flex: 0 0 auto;
 }
 
 .d-calendar-panel-heading h3,
@@ -413,6 +448,8 @@
   top: 1.25rem;
   min-height: 15rem;
   padding: 1.2rem;
+  border-color: var(--line-2);
+  background: var(--group-sand);
 }
 
 .d-calendar-inspector h3 {
@@ -574,9 +611,9 @@
   gap: .8rem;
   min-width: 0;
   padding: 1.2rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--group-blue-line);
   border-radius: var(--r-lg);
-  background: var(--surface);
+  background: var(--group-blue-tint);
   box-shadow: var(--shadow-sm);
 }
 
@@ -654,6 +691,15 @@
   flex-wrap: wrap;
   color: var(--ink-2);
   font-size: var(--ui-small, .875rem);
+}
+
+.d-answer-controls {
+  display: grid;
+  gap: .35rem;
+  padding: .45rem .55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
 }
 
 .d-answer-selection-count {

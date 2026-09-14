@@ -35,7 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="edu-header d-shell-header">
+    <header className="edu-header d-shell-header" data-header-density="compact">
       <div className="edu-header-inner d-shell-header-inner">
         <div className="d-shell-header-left">
           <a

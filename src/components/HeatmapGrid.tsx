@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarCheck, Check, HelpCircle, Lock, Star, Users, X } from 'lucide-react';
+import { BookOpen, CalendarCheck, CalendarDays, Check, Filter, HelpCircle, Lock, Star, Users, X } from 'lucide-react';
 import type { Poll, SlotAnalysis } from '../types';
 import { formatTimeSlot } from '../utils/calendar';
 import { getMeetingWindow, slotKey } from '../utils/consensus';
@@ -331,11 +331,18 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
       data-calendar-state={!hasResponses ? 'empty' : !hasProposals ? 'no-proposals' : 'ready'}
       onKeyDown={handleGridKeyDown}
     >
-      <div className="d-calendar-toolbar" aria-label="Calendar controls">
+      <div className="d-calendar-toolbar" data-visual-group="calendar-tools" aria-label="Calendar controls">
         {hasResponses && (
           <details className="d-calendar-disclosure">
             <summary>
-              <span>Filter responses</span>
+              <span className="d-calendar-summary-label">
+                <Filter
+                  className="d-calendar-summary-icon"
+                  data-visual-icon="filter"
+                  aria-hidden="true"
+                />
+                <span>Filter responses</span>
+              </span>
               {filteredParticipant && <span className="d-calendar-disclosure-badge">1 selected</span>}
             </summary>
             <div
@@ -380,7 +387,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
         )}
 
         <details className="d-calendar-disclosure d-calendar-legend-disclosure">
-          <summary>How to read the calendar</summary>
+          <summary>
+            <span className="d-calendar-summary-label">
+              <BookOpen
+                className="d-calendar-summary-icon"
+                data-visual-icon="legend"
+                aria-hidden="true"
+              />
+              <span>How to read the calendar</span>
+            </span>
+          </summary>
           <div className="d-calendar-disclosure-content d-calendar-legend" aria-label="Calendar legend">
             <span className="d-calendar-legend-item">
               <span className="d-calendar-swatch d-calendar-swatch--none" aria-hidden="true" />
@@ -416,11 +432,22 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
         </section>
       ) : (
         <div className="d-calendar-layout">
-          <section className="d-calendar-grid-panel" aria-labelledby="calendar-grid-title">
+          <section
+            className="d-calendar-grid-panel"
+            data-visual-group="calendar-panel"
+            aria-labelledby="calendar-grid-title"
+          >
             <header className="d-calendar-panel-heading">
               <div>
                 <p className="d-calendar-kicker">Group availability</p>
-                <h3 id="calendar-grid-title">Find the overlap</h3>
+                <h3 id="calendar-grid-title">
+                  <CalendarDays
+                    className="d-calendar-panel-icon"
+                    data-visual-icon="calendar"
+                    aria-hidden="true"
+                  />
+                  <span>Find the overlap</span>
+                </h3>
               </div>
               <p className="d-calendar-panel-note">Select a time to see who can attend.</p>
             </header>
@@ -444,6 +471,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
           <aside
             className="d-calendar-inspector"
+            data-visual-group="selected-time"
             data-selected-slot={inspectedKey ?? undefined}
             aria-label="Selected time details"
           >
@@ -502,7 +530,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 {inspectedDetail.isConfirmed && <p className="d-calendar-confirmed">This time is confirmed.</p>}
 
                 {inspectedDetail.meetingWindow && inspectedDetail.meetingAttendance && (
-                  <div className="d-calendar-meeting-preview" data-meeting-window-preview>
+                  <div
+                    className="d-calendar-meeting-preview"
+                    data-meeting-window-preview
+                    data-visual-group="meeting-window"
+                  >
                     <p className="d-calendar-kicker">Full meeting window</p>
                     <p className="d-calendar-meeting-range" data-meeting-window-range>
                       {formatTimeSlot(inspectedDetail.meetingWindow.startTime)} –{' '}
@@ -540,7 +572,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
       {onFinalizeSlot && pinnedDetail && pinnedMeetingWindow && pinnedDetail.meetingAttendance && !pinnedDetail.isConfirmed && (
         <ActionDock label="Finalize selected timing" className="d-calendar-finalize-dock">
-          <div className="d-calendar-finalize-content">
+          <div className="d-calendar-finalize-content" data-visual-group="finalize-timing">
             <div className="d-calendar-finalize-summary" data-finalize-summary>
               <div className="d-calendar-finalize-heading">
                 <strong

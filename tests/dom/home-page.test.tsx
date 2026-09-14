@@ -26,6 +26,15 @@ function makeSummary(id: string, title: string, finalizedSlot: PollSummary['fina
 }
 
 describe('HomePage', () => {
+  it('groups the workspace with decorative Lucide icons and explicit meeting status', () => {
+    const view = render(h(HomePage, { polls: [], onOpenPoll: vi.fn(), onCreatePoll: vi.fn() }));
+    expect(document.querySelector('[data-visual-group="meeting-start"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Create a meeting' }).querySelector('svg.lucide-plus[aria-hidden="true"]')).not.toBeNull();
+    view.rerender(h(HomePage, { polls: [makeSummary('open', 'Planning')], onOpenPoll: vi.fn(), onCreatePoll: vi.fn() }));
+    expect(document.querySelector('[data-visual-group="meeting-filters"]')).not.toBeNull();
+    expect(document.querySelector('[data-visual-group="meeting-card"][data-meeting-status="open"]')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Meetings' }).querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  });
   it('opens meeting creation from the large plus on the empty home screen', () => {
     const onCreatePoll = vi.fn();
     render(h(HomePage, { polls: [], onOpenPoll: vi.fn(), onCreatePoll }));

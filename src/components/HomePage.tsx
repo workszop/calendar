@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CalendarDays, CheckCircle2, Clock3, Search, Users } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Clock3, Plus, Search, Users } from 'lucide-react';
 import type { PollSummary } from '../types';
 import { formatDateHeading } from '../utils/calendar';
 import { ActionDock } from './ActionDock';
@@ -106,7 +106,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       <header className="d-home-page-head">
         <div>
           <p className="d-home-kicker">Your workspace</p>
-          <h1 className="d-home-title">Meetings</h1>
+          <h1 className="d-home-title"><CalendarDays aria-hidden="true" />Meetings</h1>
           <p className="d-home-lead">A shared place to find a time that works.</p>
         </div>
       </header>
@@ -129,7 +129,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             <p>We could not load your meetings. Use Retry above to try again.</p>
           </section>
         ) : (
-          <section className="d-home-empty" aria-labelledby="home-empty-title">
+          <section className="d-home-empty" data-visual-group="meeting-start" aria-labelledby="home-empty-title">
             <button
               type="button"
               className="d-home-empty-symbol"
@@ -137,7 +137,7 @@ export const HomePage: React.FC<HomePageProps> = ({
               title="Create a meeting"
               onClick={onCreatePoll}
             >
-              <span aria-hidden="true">＋</span>
+              <Plus aria-hidden="true" />
             </button>
             <h2 id="home-empty-title">Your first meeting starts here.</h2>
             <p>Propose a few dates, share a link and let people mark when they’re free.</p>
@@ -146,7 +146,7 @@ export const HomePage: React.FC<HomePageProps> = ({
         )
       ) : (
         <>
-          <div className="d-home-tools">
+          <div className="d-home-tools" data-visual-group="meeting-filters">
             <div className="d-home-segment" role="group" aria-label="Filter meetings">
               {(['open', 'agreed', 'all'] as const).map((value) => (
                 <button
@@ -180,7 +180,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 const tile = date ? dateTileParts(date) : null;
                 const status = pollStatus(poll);
                 return (
-                  <article key={poll.id} className="d-home-poll-row" data-poll-id={poll.id}>
+                  <article key={poll.id} className="d-home-poll-row" data-poll-id={poll.id} data-visual-group="meeting-card" data-meeting-status={status}>
                     <div className="d-home-date-tile" data-date={date ?? undefined}>
                       <span aria-hidden="true">{heading?.weekday ?? '–'}</span>
                       <strong aria-hidden="true">{tile?.day ?? '–'}</strong>
@@ -216,7 +216,7 @@ export const HomePage: React.FC<HomePageProps> = ({
 
                     <div className="d-home-poll-status">
                       <span className={`d-home-status-pill ${status}`}>
-                        {status === 'agreed' && <CheckCircle2 aria-hidden="true" />}
+                        {status === 'agreed' ? <CheckCircle2 aria-hidden="true" /> : <Clock3 aria-hidden="true" />}
                         {status === 'agreed' ? 'Agreed' : 'Open'}
                       </span>
                       <span className="d-home-response-count">
@@ -250,7 +250,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       {(polls.length > 0 || !listError) && (
         <ActionDock label="Meeting actions" className="d-home-action-dock">
           <button type="button" data-primary-action="create-poll" className="edu-btn-primary d-home-create" onClick={onCreatePoll}>
-            <span aria-hidden="true">＋</span> Create a poll
+            <Plus aria-hidden="true" /> Create a poll
           </button>
         </ActionDock>
       )}

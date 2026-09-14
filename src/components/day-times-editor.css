@@ -24,6 +24,14 @@
   font-weight: 600;
 }
 
+.day-times-range-controls {
+  margin-top: 1rem;
+}
+
+.day-times-range-controls > .day-times-legend {
+  margin: 0 0 0.65rem;
+}
+
 .day-times-range-row {
   display: flex;
   align-items: end;
@@ -159,7 +167,7 @@
   min-width: var(--day-times-column-width);
   padding: 0;
   vertical-align: top;
-  background: var(--paper-2);
+  background: var(--group-blue-tint);
   text-align: left;
 }
 
@@ -173,14 +181,29 @@
   gap: 0.45rem;
   min-height: 7.6rem;
   padding: 0.7rem;
+  border: 1px solid var(--group-blue-line);
+  border-radius: var(--r-sm);
+  background: var(--group-blue-tint);
 }
 
 .day-times-day-copy {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 0.1rem;
+  column-gap: 0.45rem;
+}
+
+.day-times-day-icon {
+  grid-row: 1 / span 3;
+  align-self: start;
+  width: var(--group-icon-size);
+  height: var(--group-icon-size);
+  color: var(--blue);
 }
 
 .day-times-weekday {
+  grid-column: 2;
+  grid-row: 1;
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: var(--ui-caption);
@@ -189,6 +212,8 @@
 }
 
 .day-times-day-month {
+  grid-column: 2;
+  grid-row: 2;
   color: var(--ink);
   font-family: var(--font-display);
   font-size: var(--ui-small);
@@ -196,6 +221,8 @@
 }
 
 .day-times-day-count {
+  grid-column: 2;
+  grid-row: 3;
   color: var(--ink-3);
   font-family: var(--font-mono);
   font-size: var(--ui-caption);
@@ -294,12 +321,47 @@
   border-bottom-right-radius: var(--r-sm);
 }
 
+/* Keep adjacent selected slots visually joined into one painted block. The
+   range metadata still owns the rounded start/end caps and the interaction
+   state remains unchanged. */
+.day-times-slot-cell:has(.day-times-cell--selected) {
+  padding-block: 0;
+  border-bottom-color: var(--yellow-600);
+}
+
+.day-times-cell--selected {
+  min-height: calc(var(--day-times-cell-height) + 0.4rem);
+  border-radius: 0;
+}
+
+.day-times-cell--selected.day-times-cell--range-start {
+  border-top-left-radius: var(--r-sm);
+  border-top-right-radius: var(--r-sm);
+}
+
+.day-times-cell--selected.day-times-cell--range-end {
+  border-bottom-left-radius: var(--r-sm);
+  border-bottom-right-radius: var(--r-sm);
+}
+
+.day-times-boundary-group {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem 0.45rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .day-times-check {
   width: 0.9rem;
   height: 0.9rem;
 }
 
 .day-times-boundary {
+  flex: 0 0 auto;
   display: block;
   max-width: 100%;
   overflow: hidden;
@@ -311,11 +373,15 @@
 }
 
 .day-times-boundary--start::before {
-  content: 'Start ';
+  display: inline-block;
+  margin-inline-end: 0.25rem;
+  content: 'Start';
 }
 
 .day-times-boundary--end::before {
-  content: 'End ';
+  display: inline-block;
+  margin-inline-end: 0.25rem;
+  content: 'End';
 }
 
 .day-times-empty {

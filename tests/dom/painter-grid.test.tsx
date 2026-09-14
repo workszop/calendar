@@ -67,6 +67,18 @@ async function savePainter() {
 }
 
 describe('AvailabilityPainter display interval', () => {
+  it('publishes the answer grid visual group with a decorative calendar icon', () => {
+    renderPainter(makePoll(), 30);
+
+    const grid = document.querySelector<HTMLElement>(
+      '[data-answer-grid][data-visual-group="answer-calendar"]'
+    );
+    expect(grid).not.toBeNull();
+    expect(grid?.querySelector('svg.lucide-calendar-days[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'When can you make it?' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Available' })).toBeTruthy();
+  });
+
   it('starts with an Available task grid and places identity and save after it', () => {
     renderPainter(makePoll(), 30);
 

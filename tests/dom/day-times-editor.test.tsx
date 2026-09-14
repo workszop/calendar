@@ -47,6 +47,34 @@ describe('useProposalDraft initially-empty mode', () => {
 });
 
 describe('DayTimesEditor', () => {
+  it('places the hour-window controls below the table and keeps instructions above it', () => {
+    render(h(DraftHarness));
+    const table = screen.getByRole('table', { name: 'Proposed times by day' });
+    const controls = screen.getByLabelText('Show earlier from').closest('[data-range-controls]');
+    expect(controls).not.toBeNull();
+    expect(table.compareDocumentPosition(controls!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const instructions = document.getElementById('day-times-instructions')!;
+    expect(instructions.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(controls?.textContent).toContain('Proposed times');
+    expect(controls?.textContent).toContain('Expand the window to show more rows. New rows start unselected.');
+    expect(screen.getByRole('group', { name: 'Proposed times' })).toBeTruthy();
+    fireEvent.click(cell(DATES[0], '09:00'));
+    fireEvent.change(screen.getByLabelText('Show earlier from'), { target: { value: '8' } });
+    expect(cell(DATES[0], '09:00').dataset.selected).toBe('true');
+    expect(cell(DATES[0], '08:00').dataset.selected).toBe('false');
+  });
+
+  it('publishes visual groups and icon affordances for the time workspace and day headers', async () => {
+    render(h(DraftHarness));
+
+    await waitFor(() => expect(cell(DATES[0], '09:00')).toBeTruthy());
+
+    expect(document.querySelector('[data-visual-group="time-selection"]')).toBeTruthy();
+    const dayHeaders = document.querySelectorAll('[data-visual-group="day-header"]');
+    expect(dayHeaders).toHaveLength(DATES.length);
+    expect(dayHeaders[0].querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+  });
+
   it('drops a removed copy destination instead of resurrecting its times', () => {
     const view = render(h(DraftHarness));
     fireEvent.click(cell(DATES[0], '09:00'));
@@ -203,6 +231,23 @@ describe('DayTimesEditor', () => {
     expect(cell(DATES[0], '09:30').dataset.rangeEnd).toBe('10:00');
     expect(cell(DATES[0], '10:30').dataset.rangeStart).toBe('10:30');
     expect(cell(DATES[0], '10:30').dataset.rangeEnd).toBe('11:00');
+  });
+
+  it('keeps start and end labels separated for a single selected slot', async () => {
+    render(h(DraftHarness));
+    await waitFor(() => expect(cell(DATES[0], '13:00')).toBeTruthy());
+
+    fireEvent.click(cell(DATES[0], '13:00'));
+
+    const selectedSlot = cell(DATES[0], '13:00');
+    const boundaryGroup = selectedSlot.querySelector<HTMLElement>('.day-times-boundary-group');
+    expect(boundaryGroup).not.toBeNull();
+    expect(boundaryGroup?.dataset.boundaryGroup).toBe('single-slot');
+    expect(boundaryGroup?.querySelectorAll('.day-times-boundary')).toHaveLength(2);
+    expect(boundaryGroup?.querySelector('.day-times-boundary--start')?.textContent).toBe('1:00 PM');
+    expect(boundaryGroup?.querySelector('.day-times-boundary--end')?.textContent).toBe('1:30 PM');
+    expect(selectedSlot.getAttribute('aria-pressed')).toBe('true');
+    expect(selectedSlot.getAttribute('aria-label')).toContain('proposed');
   });
 
   it('copies exact source times only after destination selection and explicit apply', async () => {

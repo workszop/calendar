@@ -84,6 +84,7 @@ describe('App navigation and home contract', () => {
     expect(screen.getByText('P2')).toBeTruthy();
     expect(fetchMock.mock.calls.map(([request]) => String(request))).toEqual(['/api/polls']);
     expect(document.querySelector('[data-screen="home"]')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'edulab, home' }).closest('header')?.getAttribute('data-header-density')).toBe('compact');
   });
 
   it('opens only the poll named by a shared query link', async () => {

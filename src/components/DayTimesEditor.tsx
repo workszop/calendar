@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { CalendarDays, Check, Copy } from 'lucide-react';
 import type { ProposalDraft } from '../hooks/useProposalDraft';
 import { DRAFT_SLOT_INTERVAL } from '../hooks/useProposalDraft';
 import { addMinutesToTime, formatDateHeading, formatHour, formatTimeSlot } from '../utils/calendar';
@@ -323,12 +323,14 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     return (
       <div
         className="day-times-day-header"
+        data-visual-group="day-header"
         data-day-times-date={date}
         data-selected={selectedForDay.size ? 'true' : 'false'}
         data-selected-count={selectedForDay.size}
         data-selected-ranges={ranges.map(rangeText).join(',')}
       >
         <div className="day-times-day-copy">
+          <CalendarDays className="day-times-day-icon" data-visual-icon="day" aria-hidden="true" />
           <span className="day-times-weekday">{heading?.weekday ?? date}</span>
           <span className="day-times-day-month">{heading?.dayMonth ?? date}</span>
           <span className="day-times-day-count" data-selected-count={selectedForDay.size}>
@@ -419,19 +421,26 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
         }${isRangeEnd ? ' day-times-cell--range-end' : ''}`}
       >
         {selected ? (
-          <>
-            {isRangeStart && (
-              <span className="day-times-boundary day-times-boundary--start" aria-hidden="true">
-                {formatTimeSlot(time)}
-              </span>
-            )}
-            {!isRangeStart && !isRangeEnd && <Check className="day-times-check" aria-hidden="true" />}
-            {isRangeEnd && (
-              <span className="day-times-boundary day-times-boundary--end" aria-hidden="true">
-                {formatTimeSlot(endTime)}
-              </span>
-            )}
-          </>
+          isRangeStart || isRangeEnd ? (
+            <span
+              className="day-times-boundary-group"
+              data-boundary-group={isRangeStart && isRangeEnd ? 'single-slot' : 'range-edge'}
+              aria-hidden="true"
+            >
+              {isRangeStart && (
+                <span className="day-times-boundary day-times-boundary--start" aria-hidden="true">
+                  {formatTimeSlot(time)}
+                </span>
+              )}
+              {isRangeEnd && (
+                <span className="day-times-boundary day-times-boundary--end" aria-hidden="true">
+                  {formatTimeSlot(endTime)}
+                </span>
+              )}
+            </span>
+          ) : (
+            <Check className="day-times-check" aria-hidden="true" />
+          )
         ) : null}
       </button>
     );
@@ -445,6 +454,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
       disabled={disabled}
       aria-describedby={error ? errorId : undefined}
       data-day-times-editor
+      data-visual-group="time-selection"
       data-disabled={disabled ? 'true' : 'false'}
       data-selected-dates={selectedDates.join(',')}
       data-slot-interval={DRAFT_SLOT_INTERVAL}
@@ -452,17 +462,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
       data-end-hour={draft.endHour}
       data-selected-count={selectedCount}
     >
-      <legend className="day-times-legend">Proposed times</legend>
-      <div className="day-times-range-row">
-        {renderRangeControl('start', 'Show earlier from', draft.startHour, startOptions)}
-        <span className="day-times-range-separator" aria-hidden="true">
-          to
-        </span>
-        {renderRangeControl('end', 'Show later until', draft.endHour, endOptions)}
-      </div>
-      <p className="day-times-range-note">
-        Expand the window to show more rows. New rows start unselected.
-      </p>
+      <legend className="sr-only">Proposed times</legend>
       <div className="day-times-instructions" id={`${idPrefix}-instructions`}>
         <span>
           Click a 30-minute slot to toggle it. Drag vertically within one day to select a range. Gaps are fine.
@@ -519,6 +519,19 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
             </table>
           </div>
         )}
+      </div>
+      <div className="day-times-range-controls" data-range-controls="below-table">
+        <p className="day-times-legend">Proposed times</p>
+        <div className="day-times-range-row">
+          {renderRangeControl('start', 'Show earlier from', draft.startHour, startOptions)}
+          <span className="day-times-range-separator" aria-hidden="true">
+            to
+          </span>
+          {renderRangeControl('end', 'Show later until', draft.endHour, endOptions)}
+        </div>
+        <p className="day-times-range-note">
+          Expand the window to show more rows. New rows start unselected.
+        </p>
       </div>
       <p className="day-times-live" aria-live="polite" data-selection-live>
         {selectedCount} proposed {selectedCount === 1 ? 'slot' : 'slots'} across {selectedDates.length}{' '}

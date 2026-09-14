@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { CalendarDays, Clock3, Type } from 'lucide-react';
 import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
 import { MonthCalendar, monthOfDateStr, startOfMonth } from './MonthCalendar';
@@ -172,11 +173,22 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
           )}
 
           <div className="d-create-top-grid">
-            <section className="d-create-details-panel" aria-label="Meeting details">
+            <section
+              className="d-create-details-panel"
+              data-visual-group="meeting-details"
+              aria-label="Meeting details"
+            >
               <div className="d-create-field-stack">
                 <label htmlFor="create-page-title" className="d-create-label">
                   <span className="d-create-label-copy">
-                    Meeting name <span className="d-create-required">(required)</span>
+                    <Type
+                      className="d-create-inline-icon"
+                      data-visual-icon="title"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      Meeting name <span className="d-create-required">(required)</span>
+                    </span>
                   </span>
                   <input
                     id="create-page-title"
@@ -199,7 +211,14 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                 </label>
 
                 <fieldset>
-                  <legend>Meeting duration</legend>
+                  <legend>
+                    <Clock3
+                      className="d-create-inline-icon"
+                      data-visual-icon="clock"
+                      aria-hidden="true"
+                    />
+                    <span>Meeting duration</span>
+                  </legend>
                   <div className="d-create-duration-options">
                     {CREATE_POLL_DURATIONS.map((minutes) => (
                       <button
@@ -222,10 +241,19 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
               </div>
             </section>
 
-            <section className="d-create-date-panel" aria-labelledby="create-dates-heading">
+            <section
+              className="d-create-date-panel"
+              data-visual-group="date-selection"
+              aria-labelledby="create-dates-heading"
+            >
               <div className="d-create-section-heading-row">
                 <h2 id="create-dates-heading" className="d-create-section-heading">
-                  Candidate dates
+                  <CalendarDays
+                    className="d-create-section-icon d-create-section-icon--blue"
+                    data-visual-icon="calendar"
+                    aria-hidden="true"
+                  />
+                  <span>Candidate dates</span>
                 </h2>
                 <span className="d-create-required">(required)</span>
               </div>
@@ -236,6 +264,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
               <fieldset disabled={isSubmitting}>
                 <legend className="sr-only">Candidate dates</legend>
                 <MonthCalendar
+                  responsive
                   selected={selectedDates}
                   onToggle={toggleDate}
                   minDate={todayStr}
@@ -285,7 +314,11 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
             </section>
           </div>
 
-          <section className="d-create-times-section" aria-labelledby="create-times-heading">
+          <section
+            className="d-create-times-section"
+            data-visual-group="time-selection"
+            aria-labelledby="create-times-heading"
+          >
             <div className="d-create-times-heading-row">
               <div>
                 <h2 id="create-times-heading" className="d-create-section-heading">
