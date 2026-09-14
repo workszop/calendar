@@ -8,6 +8,20 @@ import {
   isHalfHourValue,
   isValidHourWindow,
 } from "../src/utils/consensus";
+import {
+  latestPollDate,
+  MAX_BODY_SIZE,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_EMAIL_LENGTH,
+  MAX_ID_LENGTH,
+  MAX_LOCATION_LENGTH,
+  MAX_NAME_LENGTH,
+  MAX_PARTICIPANTS,
+  MAX_POLL_DATES,
+  MAX_POLLS,
+  MAX_TIMEZONE_LENGTH,
+  MAX_TITLE_LENGTH,
+} from "../src/utils/limits";
 import { createFilePollStore, type PollStore } from "./poll-store";
 import { isPollExpired, RETENTION_DAYS, withRetention, type Clock } from "./retention";
 
@@ -35,6 +49,12 @@ function timeToMinutes(time: string): number {
 /** Absent (undefined/null) or a string. Anything else is a client mistake. */
 function isOptionalString(value: unknown): value is string | undefined | null {
   return value === undefined || value === null || typeof value === "string";
+}
+
+/** Name of the first field whose string value is longer than its limit, if any. */
+function firstTooLong(fields: [name: string, value: unknown, max: number][]): string | undefined {
+  const hit = fields.find(([, value, max]) => typeof value === "string" && value.trim().length > max);
+  return hit ? `${hit[0]} must be at most ${hit[2]} characters.` : undefined;
 }
 
 /** Trimmed value of an optional string field, with a fallback for absent/blank. */
@@ -169,7 +189,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
     res.set("Cache-Control", "no-store");
     next();
   });
-  app.use(express.json({ limit: "5mb" }));
+  app.use(express.json({ limit: MAX_BODY_SIZE }));
 
   // ─── Storage ───
   // Polls past their retention window are hidden from reads and dropped on writes.
@@ -245,6 +265,19 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         }
       }
 
+      const createTooLong = firstTooLong([
+        ["title", body.title, MAX_TITLE_LENGTH],
+        ["description", body.description, MAX_DESCRIPTION_LENGTH],
+        ["location", body.location, MAX_LOCATION_LENGTH],
+        ["creatorName", body.creatorName, MAX_NAME_LENGTH],
+        ["creatorEmail", body.creatorEmail, MAX_EMAIL_LENGTH],
+        ["timezone", body.timezone, MAX_TIMEZONE_LENGTH],
+      ]);
+      if (createTooLong) {
+        res.status(400).json({ error: createTooLong });
+        return;
+      }
+
       const rawDates = body.dates as unknown[];
       const badDate = rawDates.find((d) => !isCalendarDate(d));
       if (badDate !== undefined) {
@@ -252,6 +285,15 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
       const dates = [...new Set(rawDates as string[])].sort();
+      if (dates.length > MAX_POLL_DATES) {
+        res.status(400).json({ error: `A poll can have at most ${MAX_POLL_DATES} dates.` });
+        return;
+      }
+      const tooFar = dates.find((d) => d > latestPollDate(clock()));
+      if (tooFar) {
+        res.status(400).json({ error: `${tooFar} is too far ahead; choose dates within the next year.` });
+        return;
+      }
 
       const slotInterval = body.slotInterval ?? 30;
       if (slotInterval !== 15 && slotInterval !== 30) {
@@ -339,15 +381,25 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
 
+      let storeFull = false;
       await pollStore.mutate((polls) => {
+        storeFull = false;
         // A CAS write may have committed before its response was lost. If
         // the store replays this closure, the allocated id makes the create
         // idempotent instead of inserting the same poll twice.
         const existing = polls.find((poll) => poll.id === newPoll.id);
         if (existing) return existing;
+        if (polls.length >= MAX_POLLS) {
+          storeFull = true;
+          return null;
+        }
         polls.unshift(newPoll);
         return newPoll;
       });
+      if (storeFull) {
+        res.status(503).json({ error: "The app has reached its poll limit. Please try again later." });
+        return;
+      }
       res.status(201).json(newPoll);
     })
   );
@@ -379,6 +431,11 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(400).json({ error: `${pastDate} is in the past.` });
         return;
       }
+      const farDate = newDates.find((d) => d > latestPollDate(clock()));
+      if (farDate) {
+        res.status(400).json({ error: `${farDate} is too far ahead; choose dates within the next year.` });
+        return;
+      }
 
       let failure: { status: number; error: string } | null = null;
 
@@ -396,6 +453,9 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         }
         const duplicate = newDates.find((d) => found.dates.includes(d));
         if (duplicate) return reject(400, `${duplicate} is already one of the poll dates.`);
+        if (found.dates.length + newDates.length > MAX_POLL_DATES) {
+          return reject(400, `A poll can have at most ${MAX_POLL_DATES} dates.`);
+        }
         const parsed = parseProposedSlots(body.proposedSlots, newDates, found.slotInterval);
         if (!parsed.ok) return reject(400, parsed.error);
         if (!parsed.value) return reject(400, "proposedSlots is required: list the times for each new date.");
@@ -474,6 +534,16 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(400).json({ error: "participantId must be a string." });
         return;
       }
+      const respondTooLong = firstTooLong([
+        ["name", name, MAX_NAME_LENGTH],
+        ["email", email, MAX_EMAIL_LENGTH],
+        ["timezone", timezone, MAX_TIMEZONE_LENGTH],
+        ["participantId", participantId, MAX_ID_LENGTH],
+      ]);
+      if (respondTooLong) {
+        res.status(400).json({ error: respondTooLong });
+        return;
+      }
       const parsedAvailability = parseAvailability(availability);
       if (!parsedAvailability.ok) {
         res.status(400).json({ error: parsedAvailability.error });
@@ -484,12 +554,14 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       // the 404 can say which of the two was missing.
       let unknownParticipant = false;
       let invalidSlot: string | undefined;
+      let pollFull = false;
 
       const outcome = await pollStore.mutate((polls) => {
         // Blob CAS may replay this closure. Never let an earlier attempt's
         // diagnostic flags leak into the final response.
         unknownParticipant = false;
         invalidSlot = undefined;
+        pollFull = false;
         const poll = polls.find((candidate) => candidate.id === req.params.id);
         if (!poll) return null;
         const proposed = new Set(poll.dates.flatMap((date) =>
@@ -510,6 +582,11 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         } else {
           const needle = name.trim().toLowerCase();
           existingIdx = poll.participants.findIndex((p) => p.name.trim().toLowerCase() === needle);
+        }
+
+        if (existingIdx === -1 && poll.participants.length >= MAX_PARTICIPANTS) {
+          pollFull = true;
+          return null;
         }
 
         // Never trust a client-supplied id for a brand-new record.
@@ -533,6 +610,10 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return { poll, participant: responseEntry };
       });
 
+      if (pollFull) {
+        res.status(409).json({ error: `This poll has reached its limit of ${MAX_PARTICIPANTS} responses.` });
+        return;
+      }
       if (invalidSlot) {
         res.status(400).json({ error: `availability slot ${invalidSlot} is outside the poll's proposed slots.` });
         return;
@@ -619,6 +700,8 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         if (!isOptionalString(confirmedBy)) {
           return reject("confirmedBy must be a string.");
         }
+        const confirmedTooLong = firstTooLong([["confirmedBy", confirmedBy, MAX_NAME_LENGTH]]);
+        if (confirmedTooLong) return reject(confirmedTooLong);
         const meetingWindow = getMeetingWindow(found, date, startTime);
         if (!meetingWindow || meetingWindow.endTime !== endTime) {
           return reject("Choose a proposed start time and the poll's exact meeting duration.");

@@ -4,6 +4,7 @@ import type { Poll, SlotStatus } from '../types';
 import { formatTimeSlot } from '../utils/calendar';
 import { slotKey } from '../utils/consensus';
 import { getBlockStatus, type GridInterval } from '../utils/grid';
+import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '../utils/limits';
 import { SLOT_STATUS_LABEL } from '../utils/slotStyles';
 import { getStoredUser, setStoredUser } from '../utils/storage';
 import { usePollGrid } from '../hooks/usePollGrid';
@@ -70,6 +71,8 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   // ─── Refs ───
   // Which participant's saved answers are currently loaded into the grid.
   const loadedParticipantIdRef = useRef<string | undefined>(undefined);
+  // The user's own grid from just before a name match replaced it.
+  const preMatchDraftRef = useRef<Record<string, SlotStatus>>({});
   // The one pending timer: clearing the save error.
   const saveErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Brush buttons, for the roving tabindex.
@@ -86,21 +89,27 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   // Loads their answers only when the matched participant actually changes, so an
   // unrelated update to poll.participants - or the same name re-matching the same
   // person - never wipes unsaved painting. A name that matches nobody drops the id,
-  // so saving creates a new participant instead of renaming someone else.
+  // so saving creates a new participant instead of renaming someone else, and puts
+  // back the grid the user had before the match: typing "Anna K" past an existing
+  // "Anna" must not carry Anna's answers into the new response.
   useEffect(() => {
     const typed = userName.trim().toLowerCase();
     const match = typed
-      ? poll.participants.find((participant) => participant.name.toLowerCase() === typed)
+      ? poll.participants.find((participant) => participant.name.trim().toLowerCase() === typed)
       : undefined;
 
     if (!match) {
       setMatchedParticipantId(undefined);
-      loadedParticipantIdRef.current = undefined;
+      if (loadedParticipantIdRef.current !== undefined) {
+        loadedParticipantIdRef.current = undefined;
+        setAvailability(preMatchDraftRef.current);
+      }
       return;
     }
 
     setMatchedParticipantId(match.id);
     if (loadedParticipantIdRef.current !== match.id) {
+      if (loadedParticipantIdRef.current === undefined) preMatchDraftRef.current = availability;
       loadedParticipantIdRef.current = match.id;
       setAvailability(match.availability || {});
       if (match.email) setUserEmail((previous) => previous || match.email || '');
@@ -586,6 +595,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
                 markDraftChanged();
               }}
               placeholder="For calendar invite notifications"
+              maxLength={MAX_EMAIL_LENGTH}
             />
           </div>
         </div>
@@ -612,7 +622,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
                     if (nameError) setNameError(null);
                   }}
                   placeholder="e.g. Alex Rivera"
-                  maxLength={80}
+                  maxLength={MAX_NAME_LENGTH}
                 />
                 {nameError && (
                   <p id="user-name-error" role="alert" className="d-answer-name-error">

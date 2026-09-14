@@ -6,6 +6,8 @@ import { BlobsServer } from '@netlify/blobs/server';
 import { getStore, setEnvironmentContext } from '@netlify/blobs';
 import type { Context } from '@netlify/functions';
 
+// A date inside the API's one-year window, whenever the suite runs.
+const FUTURE_DATE = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
 const FUNCTION_FILE = path.resolve('netlify/functions/api.ts');
 let emulator: BlobsServer;
 let directory: string;
@@ -95,13 +97,13 @@ describe('Netlify deployment contract', () => {
 
   it('persists creation and answers across requests using the real Blobs SDK', async () => {
     const created = await invoke('POST', '/api/polls', {
-      title: 'Cloud scheduling test', dates: ['2099-10-01'], durationMinutes: 45,
+      title: 'Cloud scheduling test', dates: [FUTURE_DATE], durationMinutes: 45,
       startHour: 9, endHour: 10.5,
     });
     expect(created.status).toBe(201);
     const poll = await created.json();
     const answered = await invoke('POST', `/.netlify/functions/api/polls/${poll.id}/respond`, {
-      name: 'Test participant', availability: { '2099-10-01T09:00': 'available', '2099-10-01T09:30': 'preferred' },
+      name: 'Test participant', availability: { [`${FUTURE_DATE}T09:00`]: 'available', [`${FUTURE_DATE}T09:30`]: 'preferred' },
     });
     expect(answered.status).toBe(200);
     const reloaded = await invoke('GET', `/api/polls/${poll.id}?fresh=1`);
@@ -126,7 +128,7 @@ describe('Netlify deployment contract', () => {
   it('isolates preview data from the production store', async () => {
     vi.stubEnv('CONTEXT', 'deploy-preview');
     vi.stubEnv('DEPLOY_ID', 'preview-123');
-    const created = await invoke('POST', '/api/polls', { title: 'Preview only', dates: ['2099-10-01'] });
+    const created = await invoke('POST', '/api/polls', { title: 'Preview only', dates: [FUTURE_DATE] });
     expect(created.status).toBe(201);
     vi.stubEnv('CONTEXT', 'production');
     expect(await (await invoke('GET', '/api/polls')).json()).toEqual([]);
@@ -135,7 +137,7 @@ describe('Netlify deployment contract', () => {
   it('fails clearly without storage credentials, never falls back to a local file', async () => {
     setEnvironmentContext({});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const response = await invoke('POST', '/api/polls', { title: 'Cannot save', dates: ['2099-10-01'] });
+    const response = await invoke('POST', '/api/polls', { title: 'Cannot save', dates: [FUTURE_DATE] });
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: 'Meeting storage is unavailable. Please try again later.' });
     expect(response.headers.get('cache-control')).toContain('no-store');

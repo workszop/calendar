@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
 import { isValidHourWindow } from '../utils/consensus';
+import { latestPollDate, MAX_POLL_DATES } from '../utils/limits';
 import { getStoredUser, setStoredUser } from '../utils/storage';
 import { DRAFT_SLOT_INTERVAL, useProposalDraft } from '../hooks/useProposalDraft';
 import type { ProposalDraft } from '../hooks/useProposalDraft';
@@ -83,6 +84,10 @@ export function validateCreatePoll(
   const errors: CreatePollFormErrors = validateCreatePollTitle(values.title);
 
   if (dates.length === 0) errors.dates = 'Select at least one candidate date.';
+  else if (dates.length > MAX_POLL_DATES) errors.dates = `Choose at most ${MAX_POLL_DATES} dates.`;
+  else if (dates.some((date) => date > latestPollDate(new Date()))) {
+    errors.dates = 'Choose dates within the next year.';
+  }
 
   const { startHour, endHour } = values.draft;
   if (!isValidHourWindow(startHour, endHour)) {

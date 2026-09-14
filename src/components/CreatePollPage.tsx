@@ -2,6 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CalendarDays, Clock3, Type } from 'lucide-react';
 import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
+import {
+  MAX_DESCRIPTION_LENGTH,
+  MAX_EMAIL_LENGTH,
+  MAX_LOCATION_LENGTH,
+  MAX_NAME_LENGTH,
+  MAX_TITLE_LENGTH,
+} from '../utils/limits';
 import { MonthCalendar, monthOfDateStr, startOfMonth } from './MonthCalendar';
 import { DayTimesEditor } from './DayTimesEditor';
 import { ActionDock } from './ActionDock';
@@ -200,7 +207,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                     ref={titleInputRef}
                     type="text"
                     value={title}
-                    maxLength={120}
+                    maxLength={MAX_TITLE_LENGTH}
                     placeholder="e.g. Workshop planning"
                     aria-required="true"
                     aria-invalid={errors.title ? true : undefined}
@@ -357,7 +364,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                   id="create-page-location"
                   type="text"
                   value={location}
-                  maxLength={120}
+                  maxLength={MAX_LOCATION_LENGTH}
                   placeholder="Online, or a meeting room"
                   className="edu-input"
                   disabled={isSubmitting}
@@ -370,7 +377,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                   id="create-page-organizer-name"
                   type="text"
                   value={creatorName}
-                  maxLength={80}
+                  maxLength={MAX_NAME_LENGTH}
                   placeholder="How should people know you?"
                   className="edu-input"
                   disabled={isSubmitting}
@@ -383,7 +390,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                   id="create-page-description"
                   rows={3}
                   value={description}
-                  maxLength={1000}
+                  maxLength={MAX_DESCRIPTION_LENGTH}
                   placeholder="What should people prepare?"
                   className="edu-input"
                   disabled={isSubmitting}
@@ -396,7 +403,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                   id="create-page-organizer-email"
                   type="email"
                   value={creatorEmail}
-                  maxLength={160}
+                  maxLength={MAX_EMAIL_LENGTH}
                   placeholder="you@example.com"
                   className="edu-input"
                   disabled={isSubmitting}

@@ -238,7 +238,25 @@ describe('poll API', () => {
   );
 
   it('accepts a real leap day', async () => {
-    expect((await api('POST', '/api/polls', { title: 'Leap', dates: ['2028-02-29'] })).status).toBe(201);
+    // The pinned clock's one-year window holds no leap day, so run a server a few months before one.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-leap-'));
+    const app = createApi(path.join(dir, 'polls.json'), { clock: () => new Date('2027-12-01T12:00:00Z') });
+    const local = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const addr = local.address();
+    const root = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
+    try {
+      const res = await fetch(`${root}/api/polls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Leap', dates: ['2028-02-29'] }),
+      });
+      expect(res.status).toBe(201);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects availability outside the proposed date, hours or slot interval without writing', async () => {
@@ -692,4 +710,76 @@ describe('poll API retention', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+// ─── Input limits (pinned clock 2026-09-13: latest allowed date is 2027-09-14) ───
+describe('poll API input limits', () => {
+  const datesFrom = (start: string, count: number) =>
+    Array.from({ length: count }, (_, i) => {
+      const day = new Date(`${start}T00:00:00Z`);
+      day.setUTCDate(day.getUTCDate() + i);
+      return day.toISOString().slice(0, 10);
+    });
+
+  it('accepts dates up to one year ahead and rejects later ones', async () => {
+    expect((await api('POST', '/api/polls', { title: 'Edge', dates: ['2027-09-14'] })).status).toBe(201);
+    const far = await api('POST', '/api/polls', { title: 'Far', dates: ['2026-10-01', '2027-09-15'] });
+    expect(far.status).toBe(400);
+    expect(far.json.error).toMatch(/2027-09-15 is too far ahead/);
+    expect((await api('POST', '/api/polls', { title: 'Year 9999', dates: ['9999-01-01'] })).status).toBe(400);
+  });
+
+  it('caps the number of dates on create and when adding dates', async () => {
+    const tooMany = await api('POST', '/api/polls', { title: 'Many', dates: datesFrom('2026-10-01', 61) });
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.json.error).toMatch(/at most 60 dates/);
+
+    const full = await api('POST', '/api/polls', { title: 'Full', dates: datesFrom('2026-10-01', 60) });
+    expect(full.status).toBe(201);
+    const extra = await api('POST', `/api/polls/${full.json.id}/dates`, {
+      dates: ['2027-01-15'],
+      proposedSlots: { '2027-01-15': ['09:00'] },
+    });
+    expect(extra.status).toBe(400);
+    expect(extra.json.error).toMatch(/at most 60 dates/);
+  });
+
+  it('rejects over-long text fields', async () => {
+    const title = await api('POST', '/api/polls', { title: 'x'.repeat(121), dates: ['2026-10-01'] });
+    expect(title.status).toBe(400);
+    expect(title.json.error).toBe('title must be at most 120 characters.');
+    const description = await api('POST', '/api/polls', {
+      title: 'Ok', description: 'x'.repeat(1001), dates: ['2026-10-01'],
+    });
+    expect(description.status).toBe(400);
+
+    const poll = (await api('POST', '/api/polls', { title: 'Names', dates: ['2026-10-01'] })).json;
+    const name = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'n'.repeat(81), availability: {} });
+    expect(name.status).toBe(400);
+    expect(name.json.error).toBe('name must be at most 80 characters.');
+  });
+
+  it('rejects an oversized request body with a JSON 413', async () => {
+    const res = await fetch(`${base}/api/polls`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Huge', dates: ['2026-10-01'], description: 'x'.repeat(300_000) }),
+    });
+    expect(res.status).toBe(413);
+    expect(await res.json()).toHaveProperty('error');
+  });
+
+  it('caps responses per poll but still lets existing participants update', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Crowd', dates: ['2026-10-01'] })).json;
+    for (let i = 0; i < 200; i++) {
+      expect((await api('POST', `/api/polls/${poll.id}/respond`, { name: `P${i}`, availability: {} })).status).toBe(200);
+    }
+    const extra = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Late', availability: {} });
+    expect(extra.status).toBe(409);
+    expect(extra.json.error).toMatch(/limit of 200 responses/);
+    const update = await api('POST', `/api/polls/${poll.id}/respond`, {
+      name: 'P0', availability: { '2026-10-01T09:00': 'available' },
+    });
+    expect(update.status).toBe(200);
+  }, 30_000);
 });

@@ -184,6 +184,35 @@ describe('App navigation and home contract', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['.', '..', 'p1/respond', '%2e'])('shows a poll error instead of crashing for ?poll=%s', async (bad) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      // The list route answers with an array: rendering it as a poll used to crash.
+      if (url === '/api/polls' || url === '/api/polls/') return Promise.resolve(jsonResponse([]));
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', `/?poll=${encodeURIComponent(bad)}`);
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Poll error' });
+    expect(fetchMock.mock.calls.map(([request]) => String(request))).toEqual(['/api/polls']);
+  });
+
+  it('rejects a poll response whose shape does not match the requested poll', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([]));
+      if (url === '/api/polls/p1') return Promise.resolve(jsonResponse([{ id: 'p1' }]));
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Poll error' });
+  });
+
   it('retries the requested poll after a detail load failure from home', async () => {
     const poll = makePoll('p1', 'Retry detail');
     let detailAttempts = 0;

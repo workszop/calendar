@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBlobPollStore } from "../server/blob-store";
 import { createApi } from "../server/api";
 
+// A date inside the API's one-year window, whenever the suite runs.
+const FUTURE_DATE = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+
 class MemoryBlobClient {
   data: unknown = undefined;
   exists = false;
@@ -71,7 +74,7 @@ const request = async (base: string, method: string, route: string, body?: unkno
 
 const createBody = (title: string) => ({
   title,
-  dates: ["2099-03-01"],
+  dates: [FUTURE_DATE],
   durationMinutes: 30,
   timezone: "UTC",
   creatorName: "Organizer",
@@ -126,13 +129,13 @@ describe("cloud PollStore API", () => {
     const pollId = created.json.id as string;
     const response = await request(api.base, "POST", `/api/polls/${pollId}/respond`, {
       name: "Ada",
-      availability: { "2099-03-01T09:00": "preferred" },
+      availability: { [`${FUTURE_DATE}T09:00`]: "preferred" },
     });
     expect(response.response.status).toBe(200);
     const participantId = response.json.participant.id as string;
 
     const finalized = await request(api.base, "POST", `/api/polls/${pollId}/finalize`, {
-      date: "2099-03-01",
+      date: FUTURE_DATE,
       startTime: "09:00",
       endTime: "09:30",
     });

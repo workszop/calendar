@@ -17,6 +17,7 @@ import { Toast } from './components/Toast';
 import { getStoredGridInterval, getStoredUser, setStoredGridInterval } from './utils/storage';
 import type { GridInterval } from './utils/grid';
 import { TOAST_MS } from './utils/constants';
+import { POLL_ID_RE } from './utils/limits';
 
 // ─── Constants ───
 
@@ -49,6 +50,22 @@ async function readError(res: Response, fallback: string): Promise<Error> {
     // Empty or non-JSON body: use the generic message.
   }
   return new Error(fallback);
+}
+/** API path for one poll; ids come from the URL, so they are always encoded. */
+function pollPath(pollId: string, suffix = ''): string {
+  return `/api/polls/${encodeURIComponent(pollId)}${suffix}`;
+}
+/** Just enough shape checking that rendering a response cannot throw. */
+function isPollShape(value: unknown): value is Poll {
+  const poll = value as Partial<Poll> | null;
+  return (
+    !!poll &&
+    typeof poll === 'object' &&
+    !Array.isArray(poll) &&
+    typeof poll.id === 'string' &&
+    Array.isArray(poll.dates) &&
+    Array.isArray(poll.participants)
+  );
 }
 
 // ─── Component ───
@@ -186,9 +203,12 @@ export default function App() {
       setActivePoll(null);
       setScreen('workspace');
       try {
-        const res = await fetch(`/api/polls/${pollId}`, { signal: controller.signal });
+        // A malformed id (e.g. "?poll=.") would hit another route; treat it as missing.
+        if (!POLL_ID_RE.test(pollId)) throw new Error('Poll not found');
+        const res = await fetch(pollPath(pollId), { signal: controller.signal });
         if (!res.ok) throw await readError(res, 'Poll not found');
-        const data: Poll = await res.json();
+        const data: unknown = await res.json();
+        if (!isPollShape(data) || data.id !== pollId) throw new Error('Poll not found');
         if (requestId !== navigationRequestRef.current) return;
         commitActivePoll(data);
         setPainterKey((key) => key + 1);
@@ -309,7 +329,7 @@ export default function App() {
     if (!activePoll) return;
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
-    const res = await fetch(`/api/polls/${pollId}/respond`, {
+    const res = await fetch(pollPath(pollId, '/respond'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, email, timezone: BROWSER_TIMEZONE, availability, participantId }),
@@ -332,7 +352,7 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetch(`/api/polls/${pollId}/respond/${target.id}`, { method: 'DELETE' });
+      const res = await fetch(pollPath(pollId, `/respond/${encodeURIComponent(target.id)}`), { method: 'DELETE' });
       if (!res.ok) throw await readError(res, 'Failed to remove participant');
       const updated: Poll = await res.json();
       void fetchPollsList();
@@ -350,7 +370,7 @@ export default function App() {
     setPendingPollDelete(null);
     if (!target) return;
     try {
-      const res = await fetch(`/api/polls/${target.id}`, { method: 'DELETE' });
+      const res = await fetch(pollPath(target.id), { method: 'DELETE' });
       if (!res.ok) throw await readError(res, 'Failed to delete poll');
       await fetchPollsList();
       showToast(`Deleted "${target.title}"`);
@@ -364,7 +384,7 @@ export default function App() {
     if (!activePoll) return;
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
-    const res = await fetch(`/api/polls/${pollId}/dates`, {
+    const res = await fetch(pollPath(pollId, '/dates'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dates, proposedSlots }),
@@ -382,7 +402,7 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetch(`/api/polls/${pollId}/finalize`, {
+      const res = await fetch(pollPath(pollId, '/finalize'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -409,7 +429,7 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetch(`/api/polls/${pollId}/reset`, { method: 'POST' });
+      const res = await fetch(pollPath(pollId, '/reset'), { method: 'POST' });
       if (!res.ok) throw await readError(res, 'Failed to reset finalized time');
       const updated: Poll = await res.json();
       void fetchPollsList();

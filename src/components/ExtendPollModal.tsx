@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
 import { isValidHourWindow } from '../utils/consensus';
+import { latestPollDate, MAX_POLL_DATES } from '../utils/limits';
 import { useProposalDraft } from '../hooks/useProposalDraft';
 import { Modal } from './Modal';
 import { MonthCalendar, monthOfDateStr, startOfMonth } from './MonthCalendar';
@@ -64,6 +65,11 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
     const dates = selectedDates.filter((d) => d >= todayStr && !poll.dates.includes(d));
     const nextErrors: FormErrors = {};
     if (dates.length === 0) nextErrors.dates = 'Select at least one new date.';
+    else if (poll.dates.length + dates.length > MAX_POLL_DATES) {
+      nextErrors.dates = `A poll can have at most ${MAX_POLL_DATES} dates.`;
+    } else if (dates.some((d) => d > latestPollDate(new Date()))) {
+      nextErrors.dates = 'Choose dates within the next year.';
+    }
     if (!isValidHourWindow(startHour, endHour)) {
       nextErrors.hours = 'Start hour must be earlier than end hour.';
     } else {

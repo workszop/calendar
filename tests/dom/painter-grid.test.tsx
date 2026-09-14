@@ -234,6 +234,39 @@ describe('AvailabilityPainter display interval', () => {
     expect(cell('09:30').dataset.status).toBe('preferred');
   });
 
+  it("restores the user's own grid when a typed name stops matching an existing participant", async () => {
+    const poll = makePoll({
+      endHour: 10,
+      participants: [
+        {
+          id: 'participant-anna',
+          name: 'Anna',
+          timezone: 'UTC',
+          updatedAt: '',
+          availability: { [key('09:30')]: 'preferred' },
+        },
+      ],
+    });
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(poll, 30, onSaveAvailability);
+    const nameInput = screen.getByLabelText(/Your Name/);
+
+    finishPointerStroke(cell('09:00'));
+    expect(cell('09:00').dataset.status).toBe('available');
+
+    fireEvent.change(nameInput, { target: { value: 'Anna' } });
+    await waitFor(() => expect(cell('09:30').dataset.status).toBe('preferred'));
+    expect(cell('09:00').dataset.status).toBe('none');
+
+    fireEvent.change(nameInput, { target: { value: 'Anna K' } });
+    await waitFor(() => expect(cell('09:30').dataset.status).toBe('none'));
+    expect(cell('09:00').dataset.status).toBe('available');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+    await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
+    expect(onSaveAvailability).toHaveBeenCalledWith('Anna K', '', { [key('09:00')]: 'available' }, undefined);
+  });
+
   it('renders a Mixed hourly block when atomic answers differ, with explicit coverage metadata', async () => {
     const poll = makePoll({
       endHour: 10,

@@ -201,7 +201,8 @@ export function downloadIcsFile(poll: Poll, slot: FinalizedSlot) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Revoking synchronously cancels the download in Safari and some Firefox builds.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Local YYYY-MM-DD (never toISOString - that shifts to UTC and can slip a day)
