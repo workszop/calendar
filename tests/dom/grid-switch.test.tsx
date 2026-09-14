@@ -28,8 +28,9 @@ const poll: Poll = {
 };
 
 function mockApi() {
+  localStorage.setItem('timesync_organizer_codes', JSON.stringify({ switch: 'code-switch' }));
   const fetchMock = vi.fn((url: RequestInfo | URL, _init?: RequestInit) => Promise.resolve(
-    new Response(JSON.stringify(String(url) === '/api/polls' ? [{ ...poll, participantsCount: 0 }] : poll), {
+    new Response(JSON.stringify(String(url).startsWith('/api/polls?ids=') ? [{ ...poll, participantsCount: 0 }] : poll), {
       headers: { 'Content-Type': 'application/json' },
     })
   ));
@@ -88,8 +89,10 @@ describe('grid view switch', () => {
     mockApi();
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('disabled'); });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('disabled'); });
+    // Without storage the home page knows no polls, so open it by its link.
+    window.history.replaceState({}, '', '/?poll=switch');
     render(h(App));
-    await openPoll();
+    await screen.findByRole('heading', { name: 'Grid switch' });
     openCalendarSettings();
     expect((screen.getByRole('radio', { name: '30 min' }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole('radio', { name: '1 hour' }));

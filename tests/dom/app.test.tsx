@@ -1,8 +1,21 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement as h } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '../../src/App';
 import type { Poll, PollSummary } from '../../src/types';
+
+// The home page lists only polls this browser knows; these fixtures are "created here".
+beforeEach(() => {
+  localStorage.setItem(
+    'timesync_organizer_codes',
+    JSON.stringify({ p1: 'code-p1', p2: 'code-p2', old: 'code-old', current: 'code-current' })
+  );
+});
+
+/** Request path without the home page's ?ids= list, so mocks can match routes. */
+function route(input: RequestInfo | URL): string {
+  return String(input).replace(/\?ids=.*$/, '');
+}
 
 afterEach(() => {
   cleanup();
@@ -69,7 +82,7 @@ describe('App navigation and home contract', () => {
     const poll1 = makePoll('p1', 'P1');
     const poll2 = makePoll('p2', 'P2');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll1), summary(poll2)]));
       if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll1));
       if (url === '/api/polls/p2') return Promise.resolve(jsonResponse(poll2));
@@ -82,7 +95,7 @@ describe('App navigation and home contract', () => {
 
     expect(screen.getByText('P1')).toBeTruthy();
     expect(screen.getByText('P2')).toBeTruthy();
-    expect(fetchMock.mock.calls.map(([request]) => String(request))).toEqual(['/api/polls']);
+    expect(fetchMock.mock.calls.map(([request]) => route(request))).toEqual(['/api/polls']);
     expect(document.querySelector('[data-screen="home"]')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'edulab, home' }).closest('header')?.getAttribute('data-header-density')).toBe('compact');
   });
@@ -91,7 +104,7 @@ describe('App navigation and home contract', () => {
     const poll1 = makePoll('p1', 'P1');
     const poll2 = makePoll('p2', 'P2');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll1), summary(poll2)]));
       if (url === '/api/polls/p2') return Promise.resolve(jsonResponse(poll2));
       throw new Error(`Unexpected ${url}`);
@@ -103,7 +116,7 @@ describe('App navigation and home contract', () => {
     await screen.findByRole('heading', { name: 'P2' });
 
     expect(document.querySelector('[data-active-poll-id]')?.getAttribute('data-active-poll-id')).toBe('p2');
-    expect(fetchMock.mock.calls.map(([request]) => String(request))).toEqual(['/api/polls', '/api/polls/p2']);
+    expect(fetchMock.mock.calls.map(([request]) => route(request))).toEqual(['/api/polls', '/api/polls/p2']);
     expect(screen.queryByText('P1')).toBeNull();
     expect(screen.getByRole('tab', { name: 'My answer' }).getAttribute('aria-selected')).toBe('true');
   });
@@ -111,7 +124,7 @@ describe('App navigation and home contract', () => {
   it('returns home and removes the poll query', async () => {
     const poll = makePoll('p1', 'P1');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
       if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll));
       throw new Error(`Unexpected ${url}`);
@@ -131,7 +144,7 @@ describe('App navigation and home contract', () => {
   it('follows Back and Forward between a poll and home', async () => {
     const poll = makePoll('p1', 'P1');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
       if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll));
       throw new Error(`Unexpected ${url}`);
@@ -165,7 +178,7 @@ describe('App navigation and home contract', () => {
     const poll = makePoll('p1', 'Recoverable');
     let attempts = 0;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      if (String(input) !== '/api/polls') throw new Error(`Unexpected ${String(input)}`);
+      if (route(input) !== '/api/polls') throw new Error(`Unexpected ${route(input)}`);
       attempts += 1;
       return Promise.resolve(
         attempts === 1 ? jsonResponse({ error: 'List unavailable' }, 503) : jsonResponse([summary(poll)])
@@ -186,7 +199,7 @@ describe('App navigation and home contract', () => {
 
   it.each(['.', '..', 'p1/respond', '%2e'])('shows a poll error instead of crashing for ?poll=%s', async (bad) => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       // The list route answers with an array: rendering it as a poll used to crash.
       if (url === '/api/polls' || url === '/api/polls/') return Promise.resolve(jsonResponse([]));
       throw new Error(`Unexpected ${url}`);
@@ -196,12 +209,12 @@ describe('App navigation and home contract', () => {
 
     render(h(App));
     await screen.findByRole('heading', { name: 'Poll error' });
-    expect(fetchMock.mock.calls.map(([request]) => String(request))).toEqual(['/api/polls']);
+    expect(fetchMock.mock.calls.map(([request]) => route(request))).toEqual(['/api/polls']);
   });
 
   it('rejects a poll response whose shape does not match the requested poll', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([]));
       if (url === '/api/polls/p1') return Promise.resolve(jsonResponse([{ id: 'p1' }]));
       throw new Error(`Unexpected ${url}`);
@@ -217,7 +230,7 @@ describe('App navigation and home contract', () => {
     const poll = makePoll('p1', 'Retry detail');
     let detailAttempts = 0;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
       if (url === '/api/polls/p1') {
         detailAttempts += 1;
@@ -245,7 +258,7 @@ describe('App navigation and home contract', () => {
     const currentPoll = makePoll('current', 'Current poll');
     const oldDetail = deferred<Response>();
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(oldPoll), summary(currentPoll)]));
       if (url === '/api/polls/old') return oldDetail.promise;
       if (url === '/api/polls/current') return Promise.resolve(jsonResponse(currentPoll));
@@ -272,7 +285,7 @@ describe('App navigation and home contract', () => {
     const poll = makePoll('p1', 'Delete me');
     let deleted = false;
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse(deleted ? [] : [summary(poll)]));
       if (url === '/api/polls/p1' && init?.method === 'DELETE') {
         deleted = true;
@@ -301,7 +314,7 @@ describe('App navigation and home contract', () => {
     const created = makePoll('created', 'Created meeting');
     let listCalls = 0;
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls' && !init?.method) {
         listCalls += 1;
         return Promise.resolve(jsonResponse(listCalls === 1 ? [] : [summary(created)]));
@@ -342,7 +355,7 @@ describe('App navigation and home contract', () => {
   it('keeps Add dates available in the real poll workspace', async () => {
     const poll = makePoll('p1', 'Extendable');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
       if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll));
       throw new Error(`Unexpected ${url}`);

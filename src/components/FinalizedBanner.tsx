@@ -28,7 +28,8 @@ const WHITE_PILL =
 
 interface FinalizedBannerProps {
   poll: Poll;
-  onResetFinalized: () => Promise<void>;
+  /** Omitted for anyone who is not the organizer: re-opening voting is organizer-only. */
+  onResetFinalized?: () => Promise<void>;
 }
 
 export const FinalizedBanner: React.FC<FinalizedBannerProps> = ({ poll, onResetFinalized }) => {
@@ -72,7 +73,7 @@ export const FinalizedBanner: React.FC<FinalizedBannerProps> = ({ poll, onResetF
     setConfirmReopen(false);
     setIsResetting(true);
     try {
-      await onResetFinalized();
+      await onResetFinalized?.();
     } finally {
       setIsResetting(false);
     }
@@ -162,6 +163,7 @@ export const FinalizedBanner: React.FC<FinalizedBannerProps> = ({ poll, onResetF
             {copied ? 'Copied' : ''}
           </span>
 
+{onResetFinalized && (
           <button
             id="reopen-poll-button"
             type="button"
@@ -173,6 +175,7 @@ export const FinalizedBanner: React.FC<FinalizedBannerProps> = ({ poll, onResetF
           >
             <RotateCcw className="w-4 h-4" />
           </button>
+          )}
         </div>
       </div>
 

@@ -29,13 +29,32 @@ afterAll(async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-const api = async (method: string, url: string, body?: unknown) => {
+// Organizer codes of polls created through `api`, so organizer routes work by
+// default. Participant saves (POST …/respond) never send it; pass
+// `{ guest: true }` to act as a visitor, or explicit headers to override.
+const organizerCodes = new Map<string, string>();
+
+const api = async (
+  method: string,
+  url: string,
+  body?: unknown,
+  options: { guest?: boolean; headers?: Record<string, string> } = {}
+) => {
+  const pollId = /^\/api\/polls\/([^/?]+)/.exec(url)?.[1];
+  const isRespond = method === 'POST' && /\/respond$/.test(url);
+  const code = pollId && !options.guest && !isRespond ? organizerCodes.get(pollId) : undefined;
   const res = await fetch(base + url, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(code ? { 'X-Organizer-Code': code } : {}),
+      ...options.headers,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return { status: res.status, json: await res.json() };
+  const json = await res.json();
+  if (method === 'POST' && url === '/api/polls' && res.status === 201) organizerCodes.set(json.id, json.organizerCode);
+  return { status: res.status, json };
 };
 
 describe('poll API', () => {
@@ -63,21 +82,25 @@ describe('poll API', () => {
     expect(poll.dates).toEqual(['2026-10-01', '2026-10-02']); // deduped + sorted
     expect(poll.finalizedSlot).toBeNull();
 
-    // list shows the summary
-    const list = (await api('GET', '/api/polls')).json;
+    // list shows the summary for the ids asked for
+    const list = (await api('GET', `/api/polls?ids=${poll.id},poll_missing`)).json;
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ id: poll.id, participantsCount: 0 });
 
-    // respond twice with the same name → one participant, updated
+    // respond, then update with the returned edit code → one participant, updated
     const r1 = await api('POST', `/api/polls/${poll.id}/respond`, {
       name: 'Bob',
       availability: { '2026-10-01T10:00': 'available' },
     });
     expect(r1.status).toBe(200);
-    const r2 = await api('POST', `/api/polls/${poll.id}/respond`, {
-      name: 'bob',
-      availability: { '2026-10-01T10:00': 'preferred' },
-    });
+    expect(r1.json.editCode).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const r2 = await api(
+      'POST',
+      `/api/polls/${poll.id}/respond`,
+      { name: 'bob', participantId: r1.json.participant.id, availability: { '2026-10-01T10:00': 'preferred' } },
+      { headers: { 'X-Edit-Code': r1.json.editCode } }
+    );
+    expect(r2.json.editCode).toBeUndefined();
     expect(r2.json.poll.participants).toHaveLength(1);
     expect(r2.json.poll.participants[0].availability['2026-10-01T10:00']).toBe('preferred');
 
@@ -420,16 +443,18 @@ describe('poll API', () => {
       createdAt: new Date().toISOString(),
       finalizedSlot: null,
       participants: [],
+      organizerCodeHash: 'a'.repeat(64),
     });
     fs.writeFileSync(file, JSON.stringify(polls, null, 2), 'utf-8');
 
     const fetched = await api('GET', '/api/polls/poll_outofband');
     expect(fetched.status).toBe(200);
     expect(fetched.json.title).toBe('Edited on disk');
-    expect((await api('GET', '/api/polls')).json.some((p: { id: string }) => p.id === 'poll_outofband')).toBe(true);
+    expect(fetched.json.organizerCodeHash).toBeUndefined();
+    expect((await api('GET', '/api/polls?ids=poll_outofband')).json.some((p: { id: string }) => p.id === 'poll_outofband')).toBe(true);
   });
 
-  it('rejects an unknown participantId instead of falling back to a name match', async () => {
+  it('rejects an unknown participantId and never matches responses by name', async () => {
     const poll = (await api('POST', '/api/polls', { title: 'Dedupe', dates: ['2027-02-01'] })).json;
 
     const first = await api('POST', `/api/polls/${poll.id}/respond`, {
@@ -447,12 +472,13 @@ describe('poll API', () => {
     expect(stale.status).toBe(404);
     expect(stale.json.error).toBe('Participant not found');
 
-    // The known id updates in place.
-    const known = await api('POST', `/api/polls/${poll.id}/respond`, {
-      name: 'Cara',
-      participantId: realId,
-      availability: { '2027-02-01T10:00': 'preferred' },
-    });
+    // The known id updates in place with its edit code.
+    const known = await api(
+      'POST',
+      `/api/polls/${poll.id}/respond`,
+      { name: 'Cara', participantId: realId, availability: { '2027-02-01T10:00': 'preferred' } },
+      { headers: { 'X-Edit-Code': first.json.editCode } }
+    );
     expect(known.json.poll.participants).toHaveLength(1);
     expect(known.json.participant.availability['2027-02-01T10:00']).toBe('preferred');
 
@@ -659,14 +685,14 @@ describe('poll API', () => {
       const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
         fs.writeFileSync(file, corrupt);
-        expect((await api('GET', '/api/polls')).status).toBe(500);
+        expect((await api('GET', '/api/polls?ids=poll_x')).status).toBe(500);
         expect((await api('POST', '/api/polls', { title: 'Must not overwrite', dates: ['2027-01-01'] })).status).toBe(500);
         expect(fs.readFileSync(file, 'utf-8')).toBe(corrupt);
       } finally {
         fs.writeFileSync(file, original);
         errorLog.mockRestore();
       }
-      expect((await api('GET', '/api/polls')).status).toBe(200);
+      expect((await api('GET', '/api/polls?ids=poll_x')).status).toBe(200);
     }
   );
 });
@@ -700,7 +726,7 @@ describe('poll API retention', () => {
 
       now = new Date('2026-10-05T00:00:00Z'); // 15th day: gone from reads
       expect((await call('GET', `/api/polls/${short.id}`)).status).toBe(404);
-      expect((await call('GET', '/api/polls')).json.map((p: { id: string }) => p.id)).toEqual([long.id]);
+      expect((await call('GET', `/api/polls?ids=${short.id},${long.id}`)).json.map((p: { id: string }) => p.id)).toEqual([long.id]);
       // Reads never write; the next write removes it from disk.
       expect(fs.readFileSync(file, 'utf-8')).toContain(short.id);
       await call('POST', `/api/polls/${long.id}/respond`, { name: 'Ivy', availability: {} });
@@ -771,15 +797,138 @@ describe('poll API input limits', () => {
 
   it('caps responses per poll but still lets existing participants update', async () => {
     const poll = (await api('POST', '/api/polls', { title: 'Crowd', dates: ['2026-10-01'] })).json;
+    let first: { participant: { id: string }; editCode: string } | undefined;
     for (let i = 0; i < 200; i++) {
-      expect((await api('POST', `/api/polls/${poll.id}/respond`, { name: `P${i}`, availability: {} })).status).toBe(200);
+      const saved = await api('POST', `/api/polls/${poll.id}/respond`, { name: `P${i}`, availability: {} });
+      expect(saved.status).toBe(200);
+      first ??= saved.json;
     }
     const extra = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Late', availability: {} });
     expect(extra.status).toBe(409);
     expect(extra.json.error).toMatch(/limit of 200 responses/);
-    const update = await api('POST', `/api/polls/${poll.id}/respond`, {
-      name: 'P0', availability: { '2026-10-01T09:00': 'available' },
-    });
+    const update = await api(
+      'POST',
+      `/api/polls/${poll.id}/respond`,
+      { name: 'P0', participantId: first!.participant.id, availability: { '2026-10-01T09:00': 'available' } },
+      { headers: { 'X-Edit-Code': first!.editCode } }
+    );
     expect(update.status).toBe(200);
   }, 30_000);
+});
+
+// ─── Authorization ───
+describe('poll API authorization', () => {
+  const create = async () => {
+    const created = await api('POST', '/api/polls', {
+      title: 'Private', dates: ['2026-10-01'], durationMinutes: 30, creatorEmail: 'ada@example.com',
+    });
+    expect(created.json.organizerCode).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(created.json.organizerCodeHash).toBeUndefined();
+    return created.json as { id: string; organizerCode: string };
+  };
+
+  it('lists nothing without ids and caps how many ids one request may ask for', async () => {
+    await create();
+    expect((await api('GET', '/api/polls')).json).toEqual([]);
+    const tooMany = Array.from({ length: 51 }, (_, i) => `poll_${i}`).join(',');
+    expect((await api('GET', `/api/polls?ids=${tooMany}`)).status).toBe(400);
+  });
+
+  it.each([
+    ['DELETE', ''],
+    ['POST', '/finalize', { date: '2026-10-01', startTime: '09:00', endTime: '09:30' }],
+    ['POST', '/reset'],
+    ['POST', '/dates', { dates: ['2026-10-02'], proposedSlots: { '2026-10-02': ['09:00'] } }],
+  ] as const)('forbids %s %s without the organizer code and with a wrong one', async (method, suffix, body?) => {
+    const poll = await create();
+    const other = await create();
+    const url = `/api/polls/${poll.id}${suffix}`;
+    const attempts: Record<string, string>[] = [{}, { 'X-Organizer-Code': 'wrong' }, { 'X-Organizer-Code': other.organizerCode }];
+    for (const headers of attempts) {
+      const res = await api(method, url, body, { guest: true, headers });
+      expect(res.status).toBe(403);
+      expect(res.json.error).toMatch(/Only the organizer/);
+    }
+    expect((await api('GET', `/api/polls/${poll.id}`)).status).toBe(200);
+    expect((await api(method, url, body)).status).toBe(200);
+  });
+
+  it('forbids removing a response without the organizer code', async () => {
+    const poll = await create();
+    const saved = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Bob', availability: {} });
+    const url = `/api/polls/${poll.id}/respond/${saved.json.participant.id}`;
+    const byParticipant = await api('DELETE', url, undefined, { guest: true, headers: { 'X-Edit-Code': saved.json.editCode } });
+    expect(byParticipant.status).toBe(403);
+    expect((await api('DELETE', url)).json.participants).toEqual([]);
+  });
+
+  it('lets only the edit code or the organizer update a response; same name makes a new one', async () => {
+    const poll = await create();
+    const saved = await api('POST', `/api/polls/${poll.id}/respond`, {
+      name: 'Bob', email: 'bob@example.com', availability: { '2026-10-01T09:00': 'available' },
+    });
+    const participantId = saved.json.participant.id;
+    const update = (headers: Record<string, string>) =>
+      api('POST', `/api/polls/${poll.id}/respond`,
+        { name: 'Mallory', participantId, availability: {} }, { guest: true, headers });
+
+    expect((await update({})).status).toBe(403);
+    expect((await update({ 'X-Edit-Code': 'guess' })).status).toBe(403);
+    expect((await update({ 'X-Organizer-Code': 'guess' })).status).toBe(403);
+    expect((await update({ 'X-Edit-Code': saved.json.editCode })).status).toBe(200);
+    expect((await update({ 'X-Organizer-Code': poll.organizerCode })).status).toBe(200);
+
+    const sameName = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Mallory', availability: {} });
+    expect(sameName.json.poll.participants).toHaveLength(2);
+  });
+
+  it('shows emails only to the organizer and never exposes code hashes', async () => {
+    const poll = await create();
+    await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Bob', email: 'bob@example.com', availability: {} });
+
+    const guest = (await api('GET', `/api/polls/${poll.id}`, undefined, { guest: true })).json;
+    expect(guest.creatorEmail).toBeUndefined();
+    expect(guest.participants[0].email).toBeUndefined();
+    expect(JSON.stringify(guest)).not.toMatch(/CodeHash/);
+
+    const organizer = (await api('GET', `/api/polls/${poll.id}`)).json;
+    expect(organizer.creatorEmail).toBe('ada@example.com');
+    expect(organizer.participants[0].email).toBe('bob@example.com');
+    expect(JSON.stringify(organizer)).not.toMatch(/CodeHash/);
+  });
+
+  it('reports whether a presented organizer code unlocks the poll', async () => {
+    const poll = await create();
+    expect((await api('GET', `/api/polls/${poll.id}/access`, undefined, { guest: true })).json).toEqual({ organizer: false });
+    expect((await api('GET', `/api/polls/${poll.id}/access`)).json).toEqual({ organizer: true });
+    expect((await api('GET', '/api/polls/poll_missing/access')).status).toBe(404);
+  });
+
+  it('rejects non-JSON mutations, which browsers can send cross-site without a preflight', async () => {
+    const poll = await create();
+    const res = await fetch(`${base}/api/polls/${poll.id}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ name: 'Cross site', availability: {} }),
+    });
+    expect(res.status).toBe(415);
+
+    // A bodiless POST without a Content-Type, as the browser sends for reset, is fine.
+    const reset = await fetch(`${base}/api/polls/${poll.id}/reset`, {
+      method: 'POST',
+      headers: { 'X-Organizer-Code': poll.organizerCode },
+    });
+    expect(reset.status).toBe(200);
+  });
+
+  it('retires stored polls that were created before organizer codes existed', async () => {
+    const file = path.join(tmpDir, 'polls.json');
+    const polls = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    polls.push({ ...polls[0], id: 'poll_legacy', organizerCodeHash: undefined });
+    fs.writeFileSync(file, JSON.stringify(polls, null, 2), 'utf-8');
+
+    expect((await api('GET', '/api/polls/poll_legacy')).status).toBe(404);
+    await create(); // any write prunes it from disk
+    expect(fs.readFileSync(file, 'utf-8')).not.toContain('poll_legacy');
+  });
 });

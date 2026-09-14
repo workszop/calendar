@@ -960,3 +960,59 @@
     flex-direction: column;
   }
 }
+
+/* ─── Organizer access ─── */
+.d-organizer-code label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.d-organizer-code label svg,
+.d-organizer-unlock label svg,
+.d-organizer-code-actions svg {
+  width: 16px;
+  height: 16px;
+}
+
+.d-organizer-unlock label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.d-organizer-code-hint {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: var(--ui-small, 14px);
+}
+
+.d-organizer-code-value {
+  font-family: var(--font-mono);
+  letter-spacing: .02em;
+}
+
+.d-organizer-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.d-organizer-code-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.d-organizer-unlock-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: var(--ui-small, 14px);
+}
+
+@media (max-width: 768px) {
+  .d-shell-share-box > div {
+    flex-wrap: wrap;
+  }
+}

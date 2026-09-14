@@ -24,6 +24,8 @@ interface AvailabilityPainterProps {
     participantId?: string
   ) => Promise<void>;
   onCancel?: () => void;
+  /** This device's own saved response, if it has one. Answers load from it, never from a typed name. */
+  ownParticipantId?: string;
 }
 
 // ─── Constants ───
@@ -53,6 +55,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   gridInterval,
   onSaveAvailability,
   onCancel,
+  ownParticipantId,
 }) => {
   // ─── State ───
   const [userName, setUserName] = useState(() => getStoredUser().name);
@@ -63,7 +66,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [nameError, setNameError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [matchedParticipantId, setMatchedParticipantId] = useState<string | undefined>(undefined);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [bulkToolsOpen, setBulkToolsOpen] = useState(false);
   const [pendingBrushFocus, setPendingBrushFocus] = useState<number | null>(null);
@@ -71,8 +73,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   // ─── Refs ───
   // Which participant's saved answers are currently loaded into the grid.
   const loadedParticipantIdRef = useRef<string | undefined>(undefined);
-  // The user's own grid from just before a name match replaced it.
-  const preMatchDraftRef = useRef<Record<string, SlotStatus>>({});
   // The one pending timer: clearing the save error.
   const saveErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Brush buttons, for the roving tabindex.
@@ -85,36 +85,20 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const effectiveGridInterval = gridInterval ?? poll.slotInterval;
   const activeBrushDef = BRUSHES.find((brush) => brush.status === activeBrush)!;
 
-  // ─── Prefill from a matching participant ───
-  // Loads their answers only when the matched participant actually changes, so an
-  // unrelated update to poll.participants - or the same name re-matching the same
-  // person - never wipes unsaved painting. A name that matches nobody drops the id,
-  // so saving creates a new participant instead of renaming someone else, and puts
-  // back the grid the user had before the match: typing "Anna K" past an existing
-  // "Anna" must not carry Anna's answers into the new response.
+  // ─── Prefill from this device's own response ───
+  // Loads the answers once per participant, so a later poll update never wipes
+  // unsaved painting. Typing someone else's name loads nothing: updating a
+  // response needs the edit code only the browser that saved it holds.
+  const ownParticipant = ownParticipantId
+    ? poll.participants.find((participant) => participant.id === ownParticipantId)
+    : undefined;
+
   useEffect(() => {
-    const typed = userName.trim().toLowerCase();
-    const match = typed
-      ? poll.participants.find((participant) => participant.name.trim().toLowerCase() === typed)
-      : undefined;
-
-    if (!match) {
-      setMatchedParticipantId(undefined);
-      if (loadedParticipantIdRef.current !== undefined) {
-        loadedParticipantIdRef.current = undefined;
-        setAvailability(preMatchDraftRef.current);
-      }
-      return;
-    }
-
-    setMatchedParticipantId(match.id);
-    if (loadedParticipantIdRef.current !== match.id) {
-      if (loadedParticipantIdRef.current === undefined) preMatchDraftRef.current = availability;
-      loadedParticipantIdRef.current = match.id;
-      setAvailability(match.availability || {});
-      if (match.email) setUserEmail((previous) => previous || match.email || '');
-    }
-  }, [userName, poll.participants]);
+    if (!ownParticipant || loadedParticipantIdRef.current === ownParticipant.id) return;
+    loadedParticipantIdRef.current = ownParticipant.id;
+    setAvailability(ownParticipant.availability || {});
+    setUserName((previous) => previous || ownParticipant.name);
+  }, [ownParticipant]);
 
   // ─── Timer cleanup ───
   useEffect(
@@ -328,13 +312,13 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     setStoredUser({ name: userName.trim(), email: userEmail.trim() || undefined });
 
     try {
-      await onSaveAvailability(userName.trim(), userEmail.trim(), availability, matchedParticipantId);
+      await onSaveAvailability(userName.trim(), userEmail.trim(), availability, ownParticipant?.id);
       setSaveState('saved');
     } catch (error) {
       console.error(error);
       if (error instanceof Error && /participant not found/i.test(error.message)) {
-        // The response we were updating was removed meanwhile: save as a new one next time.
-        setMatchedParticipantId(undefined);
+        // The response we were updating was removed meanwhile. The app forgets its
+        // stored id, so the next save adds a new response.
         loadedParticipantIdRef.current = undefined;
         showSaveError('Your earlier response was removed. Save again to add it as new.');
       } else {

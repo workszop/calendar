@@ -3,6 +3,7 @@ import type { Poll } from '../src/types';
 import type { PollStore } from '../server/poll-store';
 import {
   cleanupExpiredPolls,
+  isLegacyPoll,
   isPollExpired,
   pruneExpiredPolls,
   RETENTION_DAYS,
@@ -23,6 +24,7 @@ const makePoll = (id: string, dates: string[]): Poll => ({
   createdAt: '2026-01-01T00:00:00.000Z',
   finalizedSlot: null,
   participants: [],
+  organizerCodeHash: 'a'.repeat(64),
 });
 
 /** In-memory store that counts writes, like the real stores skip null results. */
@@ -108,5 +110,17 @@ describe('retention store wrapper', () => {
     expect(mem.writes()).toBe(1);
     expect(await cleanupExpiredPolls(mem.store, clock)).toBe(0);
     expect(mem.writes()).toBe(1);
+  });
+});
+
+describe('legacy polls without an organizer code', () => {
+  it('are pruned like expired polls', () => {
+    const legacy = { ...makePoll('legacy', ['2026-12-01']), organizerCodeHash: undefined };
+    const current = makePoll('current', ['2026-12-01']);
+    expect(isLegacyPoll(legacy)).toBe(true);
+    expect(isLegacyPoll(current)).toBe(false);
+    const polls = [legacy, current];
+    expect(pruneExpiredPolls(polls, new Date('2026-09-14T00:00:00Z'))).toBe(1);
+    expect(polls.map((poll) => poll.id)).toEqual(['current']);
   });
 });

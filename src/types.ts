@@ -8,6 +8,8 @@ export interface ParticipantResponse {
   updatedAt: string;
   // Key format: "YYYY-MM-DDTHH:mm" (e.g. "2026-09-15T14:30")
   availability: Record<string, SlotStatus>;
+  /** Server-only: SHA-256 of the participant's edit code. Never sent to clients. */
+  editCodeHash?: string;
 }
 
 export interface DayHours {
@@ -44,6 +46,8 @@ export interface Poll {
   createdAt: string;
   finalizedSlot?: FinalizedSlot | null;
   participants: ParticipantResponse[];
+  /** Server-only: SHA-256 of the organizer code. Never sent to clients. */
+  organizerCodeHash?: string;
 }
 
 export interface SlotAnalysis {

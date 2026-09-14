@@ -63,10 +63,16 @@ const stop = async (server: Server) => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 };
 
-const request = async (base: string, method: string, route: string, body?: unknown) => {
+const request = async (
+  base: string,
+  method: string,
+  route: string,
+  body?: unknown,
+  headers: Record<string, string> = {}
+) => {
   const response = await fetch(`${base}${route}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { response, json: await response.json() };
@@ -101,7 +107,7 @@ describe("cloud PollStore API", () => {
     expect(one.response.status).toBe(201);
     expect(two.response.status).toBe(201);
 
-    const listed = await request(first.base, "GET", "/api/polls");
+    const listed = await request(first.base, "GET", `/api/polls?ids=${one.json.id},${two.json.id}`);
     expect(listed.response.status).toBe(200);
     expect(listed.json.map((poll: { title: string }) => poll.title).sort()).toEqual(["First", "Second"]);
   });
@@ -114,7 +120,7 @@ describe("cloud PollStore API", () => {
 
     const created = await request(api.base, "POST", "/api/polls", createBody("Exactly once"));
     expect(created.response.status).toBe(201);
-    const listed = await request(api.base, "GET", "/api/polls");
+    const listed = await request(api.base, "GET", `/api/polls?ids=${created.json.id}`);
     expect(listed.json).toHaveLength(1);
     expect(listed.json[0].title).toBe("Exactly once");
   });
@@ -127,6 +133,7 @@ describe("cloud PollStore API", () => {
     const created = await request(api.base, "POST", "/api/polls", createBody("Lifecycle"));
     expect(created.response.status).toBe(201);
     const pollId = created.json.id as string;
+    const organizer = { "X-Organizer-Code": created.json.organizerCode as string };
     const response = await request(api.base, "POST", `/api/polls/${pollId}/respond`, {
       name: "Ada",
       availability: { [`${FUTURE_DATE}T09:00`]: "preferred" },
@@ -138,11 +145,13 @@ describe("cloud PollStore API", () => {
       date: FUTURE_DATE,
       startTime: "09:00",
       endTime: "09:30",
-    });
+    }, organizer);
     expect(finalized.response.status).toBe(200);
     expect(finalized.json.finalizedSlot.startTime).toBe("09:00");
-    expect((await request(api.base, "POST", `/api/polls/${pollId}/reset`)).response.status).toBe(200);
-    expect((await request(api.base, "DELETE", `/api/polls/${pollId}/respond/${participantId}`)).response.status).toBe(200);
+    expect((await request(api.base, "POST", `/api/polls/${pollId}/reset`, undefined, organizer)).response.status).toBe(200);
+    expect(
+      (await request(api.base, "DELETE", `/api/polls/${pollId}/respond/${participantId}`, undefined, organizer)).response.status
+    ).toBe(200);
   });
 
   it("returns no-store on reads and JSON 500 when the blob read fails", async () => {
@@ -153,7 +162,7 @@ describe("cloud PollStore API", () => {
 
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      const { response, json } = await request(api.base, "GET", "/api/polls");
+      const { response, json } = await request(api.base, "GET", "/api/polls?ids=poll_x");
       expect(response.status).toBe(500);
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(json).toEqual({ error: "Internal server error" });

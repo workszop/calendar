@@ -45,7 +45,7 @@ shared JSON-array store is intended for small trusted groups, not a high-volume
 database. Netlify Functions and Blobs usage is subject to your account's limits.
 
 After deploying, `/api/health` must return JSON with `status: "ok"` and
-`/api/polls` must return a JSON array, not an HTML page or 404. Local commands
+`/api/polls` must return a JSON array (empty without `?ids=`), not an HTML page or 404. Local commands
 continue to use the local JSON file; it is never uploaded automatically.
 
 ## Test
@@ -112,10 +112,24 @@ The group heatmap counts someone as available only for an entire displayed block
 
 ## Deployment limits
 
-This is a trusted-group app, not an authenticated public service: anyone with
-access can list polls, read contact details, edit responses and finalize meetings.
-Use a private network or an authenticated reverse proxy before sharing beyond
-the trusted group. Run only one server process per data file; the write queue
+## Access codes
+
+There are no accounts. Creating a poll returns an **organizer code**, kept in the
+creating browser and shown once on the share screen, where it can be copied, sent
+as an organizer link (`?poll=<id>#organizer=<code>`) or saved as a text file.
+Locking a time, re-opening voting, adding dates, removing responses and deleting
+the poll require that code (`X-Organizer-Code` header); anyone else can enter it
+under **Manage poll** to unlock those tools. Each saved response gets an **edit
+code** kept in the answering browser (`X-Edit-Code`); a response cannot be changed
+without it, and typing an existing name creates a new response. Codes cannot be
+recovered: the server stores only their SHA-256 hashes. Emails are returned only
+to the organizer. There is no public poll list: the home page shows polls this
+browser created or answered. Polls stored before access codes existed are removed.
+
+## Deployment limits
+
+Anyone holding a poll link can read its title, dates, names and answers, and add
+a response. Run only one server process per data file; the write queue
 does not coordinate multiple processes. Back up the data file before upgrades.
 Unreadable or malformed JSON storage returns an error rather than overwriting
 existing data with an empty poll list.

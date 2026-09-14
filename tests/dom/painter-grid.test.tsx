@@ -41,7 +41,8 @@ function cell(time: string, date = '2026-10-01'): HTMLButtonElement {
 function renderPainter(
   poll: Poll,
   gridInterval: 30 | 60,
-  onSaveAvailability = vi.fn().mockResolvedValue(undefined)
+  onSaveAvailability = vi.fn().mockResolvedValue(undefined),
+  ownParticipantId?: string
 ) {
   return {
     ...render(
@@ -49,6 +50,7 @@ function renderPainter(
         poll,
         gridInterval,
         onSaveAvailability,
+        ownParticipantId,
       })
     ),
     onSaveAvailability,
@@ -190,8 +192,7 @@ describe('AvailabilityPainter display interval', () => {
       ],
     });
     const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
-    localStorage.setItem('timesync_user_name', 'Bob');
-    renderPainter(poll, 30, onSaveAvailability);
+    renderPainter(poll, 30, onSaveAvailability, 'participant-1');
 
     await waitFor(() => expect(cell('09:00').dataset.status).toBe('preferred'));
     fireEvent.click(screen.getByText('Quick fill tools'));
@@ -225,8 +226,7 @@ describe('AvailabilityPainter display interval', () => {
         },
       ],
     });
-    localStorage.setItem('timesync_user_name', 'Bob');
-    renderPainter(poll, 30);
+    renderPainter(poll, 30, undefined, 'participant-1');
 
     await waitFor(() => expect(cell('09:30').dataset.status).toBe('preferred'));
     finishPointerStroke(cell('09:00'));
@@ -234,7 +234,7 @@ describe('AvailabilityPainter display interval', () => {
     expect(cell('09:30').dataset.status).toBe('preferred');
   });
 
-  it("restores the user's own grid when a typed name stops matching an existing participant", async () => {
+  it("never loads another participant's answers when their name is typed", async () => {
     const poll = makePoll({
       endHour: 10,
       participants: [
@@ -249,22 +249,40 @@ describe('AvailabilityPainter display interval', () => {
     });
     const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
     renderPainter(poll, 30, onSaveAvailability);
-    const nameInput = screen.getByLabelText(/Your Name/);
 
     finishPointerStroke(cell('09:00'));
+    fireEvent.change(screen.getByLabelText(/Your Name/), { target: { value: 'Anna' } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(cell('09:30').dataset.status).toBe('none');
     expect(cell('09:00').dataset.status).toBe('available');
-
-    fireEvent.change(nameInput, { target: { value: 'Anna' } });
-    await waitFor(() => expect(cell('09:30').dataset.status).toBe('preferred'));
-    expect(cell('09:00').dataset.status).toBe('none');
-
-    fireEvent.change(nameInput, { target: { value: 'Anna K' } });
-    await waitFor(() => expect(cell('09:30').dataset.status).toBe('none'));
-    expect(cell('09:00').dataset.status).toBe('available');
-
     fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
     await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
-    expect(onSaveAvailability).toHaveBeenCalledWith('Anna K', '', { [key('09:00')]: 'available' }, undefined);
+    // No participant id: saving creates a new response instead of replacing Anna's.
+    expect(onSaveAvailability).toHaveBeenCalledWith('Anna', '', { [key('09:00')]: 'available' }, undefined);
+  });
+
+  it("loads this device's own saved response by id and updates it", async () => {
+    const poll = makePoll({
+      endHour: 10,
+      participants: [
+        {
+          id: 'participant-me',
+          name: 'Me',
+          timezone: 'UTC',
+          updatedAt: '',
+          availability: { [key('09:30')]: 'if_needed' },
+        },
+      ],
+    });
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(poll, 30, onSaveAvailability, 'participant-me');
+
+    await waitFor(() => expect(cell('09:30').dataset.status).toBe('if_needed'));
+    expect((screen.getByLabelText(/Your Name/) as HTMLInputElement).value).toBe('Me');
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+    await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
+    expect(onSaveAvailability.mock.calls[0]?.[3]).toBe('participant-me');
   });
 
   it('renders a Mixed hourly block when atomic answers differ, with explicit coverage metadata', async () => {
@@ -280,8 +298,7 @@ describe('AvailabilityPainter display interval', () => {
         },
       ],
     });
-    localStorage.setItem('timesync_user_name', 'Bob');
-    renderPainter(poll, 60);
+    renderPainter(poll, 60, undefined, 'participant-1');
 
     await waitFor(() => expect(cell('09:00').dataset.status).toBe('mixed'));
 

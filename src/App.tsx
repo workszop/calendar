@@ -14,7 +14,19 @@ import { ShareModal } from './components/ShareModal';
 import { ExtendPollModal } from './components/ExtendPollModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toast } from './components/Toast';
-import { getStoredGridInterval, getStoredUser, setStoredGridInterval } from './utils/storage';
+import {
+  forgetPoll,
+  getKnownPollIds,
+  getOrganizerCode,
+  getStoredGridInterval,
+  getStoredResponse,
+  getStoredUser,
+  removeStoredResponse,
+  setOrganizerCode,
+  setStoredGridInterval,
+  setStoredResponse,
+} from './utils/storage';
+import { OrganizerCodePanel, takeOrganizerCodeFromUrl, UnlockOrganizerForm } from './components/OrganizerAccess';
 import type { GridInterval } from './utils/grid';
 import { TOAST_MS } from './utils/constants';
 import { POLL_ID_RE } from './utils/limits';
@@ -55,6 +67,14 @@ async function readError(res: Response, fallback: string): Promise<Error> {
 function pollPath(pollId: string, suffix = ''): string {
   return `/api/polls/${encodeURIComponent(pollId)}${suffix}`;
 }
+/** How many remembered polls the home page asks the API for. */
+const HOME_POLL_LIMIT = 50;
+/** Sends this browser's organizer code for a poll, when it has one. */
+function organizerHeaders(pollId: string): Record<string, string> {
+  const code = getOrganizerCode(pollId);
+  return code ? { 'X-Organizer-Code': code } : {};
+}
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
 /** Just enough shape checking that rendering a response cannot throw. */
 function isPollShape(value: unknown): value is Poll {
   const poll = value as Partial<Poll> | null;
@@ -94,6 +114,10 @@ export default function App() {
   const [activeParticipantFilter, setActiveParticipantFilter] = useState<string | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
+  // Bumped whenever a stored organizer or edit code changes, so the render
+  // re-reads them from storage.
+  const [, setAccessVersion] = useState(0);
+  const [createdOrganizerCode, setCreatedOrganizerCode] = useState<string | null>(null);
 
   // ─── Refs ───
   const didInit = useRef(false);
@@ -175,9 +199,14 @@ export default function App() {
   const fetchPollsList = useCallback(async (): Promise<PollSummary[]> => {
     const requestId = ++listRequestRef.current;
     try {
-      const res = await fetch('/api/polls');
-      if (!res.ok) throw await readError(res, 'Failed to fetch polls');
-      const data: PollSummary[] = await res.json();
+      // Only polls this browser created or answered: there is no public list.
+      const ids = getKnownPollIds(HOME_POLL_LIMIT);
+      let data: PollSummary[] = [];
+      if (ids.length > 0) {
+        const res = await fetch(`/api/polls?ids=${ids.map(encodeURIComponent).join(',')}`);
+        if (!res.ok) throw await readError(res, 'Failed to fetch polls');
+        data = await res.json();
+      }
       if (requestId === listRequestRef.current) {
         pollsListRef.current = data;
         setPollsList(data);
@@ -205,7 +234,7 @@ export default function App() {
       try {
         // A malformed id (e.g. "?poll=.") would hit another route; treat it as missing.
         if (!POLL_ID_RE.test(pollId)) throw new Error('Poll not found');
-        const res = await fetch(pollPath(pollId), { signal: controller.signal });
+        const res = await fetch(pollPath(pollId), { signal: controller.signal, headers: organizerHeaders(pollId) });
         if (!res.ok) throw await readError(res, 'Poll not found');
         const data: unknown = await res.json();
         if (!isPollShape(data) || data.id !== pollId) throw new Error('Poll not found');
@@ -230,6 +259,12 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const pollParam = params.get('poll');
       if (pollParam) {
+        // An organizer link carries the code in the fragment: keep it, then drop it from the URL.
+        const organizerCode = takeOrganizerCodeFromUrl();
+        if (organizerCode && POLL_ID_RE.test(pollParam)) {
+          setOrganizerCode(pollParam, organizerCode);
+          setAccessVersion((version) => version + 1);
+        }
         // Only a freshly opened shared link lands on the answer tab; Back/Forward
         // leaves the current tab alone.
         if (isInitialLoad) setActiveTab('answer');
@@ -329,13 +364,33 @@ export default function App() {
     if (!activePoll) return;
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
+    const own = participantId ? getStoredResponse(pollId) : undefined;
     const res = await fetch(pollPath(pollId, '/respond'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        ...JSON_HEADERS,
+        ...organizerHeaders(pollId),
+        ...(own?.participantId === participantId && own ? { 'X-Edit-Code': own.editCode } : {}),
+      },
       body: JSON.stringify({ name, email, timezone: BROWSER_TIMEZONE, availability, participantId }),
     });
-    if (!res.ok) throw await readError(res, 'Failed to save response');
-    const { poll: updatedPoll } = (await res.json()) as { poll: Poll };
+    if (!res.ok) {
+      const failure = await readError(res, 'Failed to save response');
+      if (res.status === 404 && /participant not found/i.test(failure.message)) {
+        removeStoredResponse(pollId);
+        setAccessVersion((version) => version + 1);
+      }
+      throw failure;
+    }
+    const { poll: updatedPoll, participant, editCode } = (await res.json()) as {
+      poll: Poll;
+      participant?: { id: string };
+      editCode?: string;
+    };
+    if (participant && editCode) {
+      setStoredResponse(pollId, { participantId: participant.id, editCode });
+      setAccessVersion((version) => version + 1);
+    }
     void fetchPollsList();
     if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
     commitActivePoll(updatedPoll);
@@ -352,7 +407,10 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetch(pollPath(pollId, `/respond/${encodeURIComponent(target.id)}`), { method: 'DELETE' });
+      const res = await fetch(pollPath(pollId, `/respond/${encodeURIComponent(target.id)}`), {
+        method: 'DELETE',
+        headers: organizerHeaders(pollId),
+      });
       if (!res.ok) throw await readError(res, 'Failed to remove participant');
       const updated: Poll = await res.json();
       void fetchPollsList();
@@ -370,8 +428,10 @@ export default function App() {
     setPendingPollDelete(null);
     if (!target) return;
     try {
-      const res = await fetch(pollPath(target.id), { method: 'DELETE' });
+      const res = await fetch(pollPath(target.id), { method: 'DELETE', headers: organizerHeaders(target.id) });
       if (!res.ok) throw await readError(res, 'Failed to delete poll');
+      forgetPoll(target.id);
+      setAccessVersion((version) => version + 1);
       await fetchPollsList();
       showToast(`Deleted "${target.title}"`);
       if (activePollIdRef.current === target.id) await goHome('replace');
@@ -386,7 +446,7 @@ export default function App() {
     const navigationRequestId = navigationRequestRef.current;
     const res = await fetch(pollPath(pollId, '/dates'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...JSON_HEADERS, ...organizerHeaders(pollId) },
       body: JSON.stringify({ dates, proposedSlots }),
     });
     if (!res.ok) throw await readError(res, 'Failed to add dates');
@@ -404,7 +464,7 @@ export default function App() {
     try {
       const res = await fetch(pollPath(pollId, '/finalize'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...JSON_HEADERS, ...organizerHeaders(pollId) },
         body: JSON.stringify({
           date,
           startTime,
@@ -429,7 +489,7 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetch(pollPath(pollId, '/reset'), { method: 'POST' });
+      const res = await fetch(pollPath(pollId, '/reset'), { method: 'POST', headers: organizerHeaders(pollId) });
       if (!res.ok) throw await readError(res, 'Failed to reset finalized time');
       const updated: Poll = await res.json();
       void fetchPollsList();
@@ -452,12 +512,18 @@ export default function App() {
         body: JSON.stringify(pollData),
       });
       if (!res.ok) throw await readError(res, 'Failed to create poll');
-      const newPoll: Poll = await res.json();
+      const { organizerCode, ...newPoll } = (await res.json()) as Poll & { organizerCode?: string };
+      // Stored before anything else, so a later navigation can never lose it.
+      if (organizerCode) {
+        setOrganizerCode(newPoll.id, organizerCode);
+        setAccessVersion((version) => version + 1);
+      }
       void fetchPollsList();
       // A successful POST remains discoverable even if the user navigated away,
       // but stale detail must never replace the current screen.
       if (navigationRequestId !== navigationRequestRef.current || screen !== 'create') return;
       setCreatedPoll(newPoll);
+      setCreatedOrganizerCode(organizerCode ?? null);
       setActivePoll(null);
       setActiveParticipantFilter(null);
       setShareReadyCopied(false);
@@ -528,10 +594,32 @@ export default function App() {
     }
   }, [createdPoll, showToast]);
 
+  // Checks a typed organizer code with the server before keeping it.
+  const handleUnlockOrganizer = useCallback(async (code: string): Promise<boolean> => {
+    const pollId = activePollIdRef.current;
+    if (!pollId) return false;
+    const res = await fetch(pollPath(pollId, '/access'), { headers: { 'X-Organizer-Code': code } });
+    if (!res.ok) throw await readError(res, 'Could not check the code');
+    const { organizer } = (await res.json()) as { organizer?: boolean };
+    if (!organizer) return false;
+    setOrganizerCode(pollId, code);
+    setAccessVersion((version) => version + 1);
+    showToast('Organizer tools unlocked');
+    // Reload so organizer-only details (such as emails) arrive.
+    const detail = await fetch(pollPath(pollId), { headers: organizerHeaders(pollId) });
+    if (detail.ok) {
+      const data: unknown = await detail.json();
+      if (isPollShape(data) && data.id === pollId && activePollIdRef.current === pollId) commitActivePoll(data);
+    }
+    void fetchPollsList();
+    return true;
+  }, [commitActivePoll, fetchPollsList, showToast]);
+
   const openCreatedPoll = useCallback(() => {
     if (!createdPoll) return;
     const id = createdPoll.id;
     setShareReadyCopied(false);
+    setCreatedOrganizerCode(null);
     void fetchPoll(id, 'push');
   }, [createdPoll, fetchPoll]);
 
@@ -552,14 +640,17 @@ export default function App() {
   // ─── Render ───
 
   const poll = activePoll;
-  const canFinalize = poll !== null && !poll.finalizedSlot && poll.participants.length > 0;
+  const organizerCode = poll ? getOrganizerCode(poll.id) : undefined;
+  const isOrganizer = Boolean(organizerCode);
+  const ownResponse = poll ? getStoredResponse(poll.id) : undefined;
+  const canFinalize = isOrganizer && poll !== null && !poll.finalizedSlot && poll.participants.length > 0;
   const shareReadyUrl = createdPoll
     ? `${window.location.origin}${window.location.pathname}?poll=${createdPoll.id}`
     : '';
 
   const workspace = poll && (
     <section className="d-shell-workspace" data-screen="workspace" data-selection={activeTab}>
-      <FinalizedBanner poll={poll} onResetFinalized={handleResetFinalized} />
+      <FinalizedBanner poll={poll} onResetFinalized={isOrganizer ? handleResetFinalized : undefined} />
 
       <header className="d-shell-page-head">
         <div>
@@ -571,7 +662,7 @@ export default function App() {
           <span><Clock aria-hidden="true" />{poll.durationMinutes} min</span>
           {poll.location && <span><MapPin aria-hidden="true" />{poll.location}</span>}
           <span><Users aria-hidden="true" />{poll.participants.length} {poll.participants.length === 1 ? 'response' : 'responses'}</span>
-          {!poll.finalizedSlot && (
+          {isOrganizer && !poll.finalizedSlot && (
             <button
               type="button"
               id="add-dates-button"
@@ -670,6 +761,7 @@ export default function App() {
             gridInterval={gridInterval}
             onSaveAvailability={handleSaveAvailability}
             onCancel={() => setActiveTab('overview')}
+            ownParticipantId={ownResponse?.participantId}
           />
         </div>
       )}
@@ -698,13 +790,15 @@ export default function App() {
                       <strong>{participant.name}</strong>
                       <span>{availableSlotsCount} slots available</span>
                     </div>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${participant.name}'s response`}
-                      onClick={() => setPendingDelete({ pollId: poll.id, id: participant.id, name: participant.name })}
-                    >
-                      <Trash2 aria-hidden="true" />
-                    </button>
+                    {isOrganizer && (
+                      <button
+                        type="button"
+                        aria-label={`Remove ${participant.name}'s response`}
+                        onClick={() => setPendingDelete({ pollId: poll.id, id: participant.id, name: participant.name })}
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -712,16 +806,23 @@ export default function App() {
           ) : (
             <p className="d-shell-muted">No responses yet. Share the poll to get started.</p>
           )}
-          <div className="d-shell-management-actions">
-            {!poll.finalizedSlot && (
-              <button type="button" className="edu-btn-secondary" onClick={() => setIsExtendModalOpen(true)}>
-                <CalendarPlus aria-hidden="true" /> Add dates
-              </button>
-            )}
-            <button type="button" className="edu-btn-secondary d-shell-danger-action" onClick={handleDeleteCurrentPoll}>
-              <Trash2 aria-hidden="true" /> Delete this poll
-            </button>
-          </div>
+          {organizerCode ? (
+            <>
+              <OrganizerCodePanel pollId={poll.id} pollTitle={poll.title} code={organizerCode} onNotify={showToast} />
+              <div className="d-shell-management-actions">
+                {!poll.finalizedSlot && (
+                  <button type="button" className="edu-btn-secondary" onClick={() => setIsExtendModalOpen(true)}>
+                    <CalendarPlus aria-hidden="true" /> Add dates
+                  </button>
+                )}
+                <button type="button" className="edu-btn-secondary d-shell-danger-action" onClick={handleDeleteCurrentPoll}>
+                  <Trash2 aria-hidden="true" /> Delete this poll
+                </button>
+              </div>
+            </>
+          ) : (
+            <UnlockOrganizerForm onUnlock={handleUnlockOrganizer} />
+          )}
         </div>
       </details>
     </section>
@@ -781,6 +882,15 @@ export default function App() {
                 </button>
               </div>
             </div>
+            {createdOrganizerCode && (
+              <OrganizerCodePanel
+                pollId={createdPoll.id}
+                pollTitle={createdPoll.title}
+                code={createdOrganizerCode}
+                onNotify={showToast}
+                emphasis="prompt"
+              />
+            )}
             <div className="d-shell-share-actions">
               <button type="button" className="edu-btn-primary" onClick={openCreatedPoll}>Open poll</button>
               <button type="button" className="edu-btn-secondary" onClick={() => void goHome()}>Back to meetings</button>

@@ -1,4 +1,5 @@
 import type { Poll, FinalizedSlot } from '../types';
+import { downloadTextFile, fileSafeName } from './download';
 
 // ─── Date headings ───
 // Intl formatting is the hot path of every grid render, so results are cached
@@ -191,18 +192,11 @@ export function generateIcsContent(poll: Poll, slot: FinalizedSlot): string {
 }
 
 export function downloadIcsFile(poll: Poll, slot: FinalizedSlot) {
-  const icsContent = generateIcsContent(poll, slot);
-
-  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${poll.title.replace(/[^a-zA-Z0-9]/g, '_')}_Meeting.ics`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  // Revoking synchronously cancels the download in Safari and some Firefox builds.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadTextFile(
+    `${fileSafeName(poll.title)}_Meeting.ics`,
+    generateIcsContent(poll, slot),
+    'text/calendar;charset=utf-8'
+  );
 }
 
 // Local YYYY-MM-DD (never toISOString - that shifts to UTC and can slip a day)

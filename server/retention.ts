@@ -24,10 +24,18 @@ export function isPollExpired(poll: Poll, now: Date): boolean {
   return now.toISOString().slice(0, 10) > lastKeepDay(lastDate);
 }
 
-/** Removes expired polls from the array in place; returns how many were removed. */
+/**
+ * Polls created before organizer codes existed have no owner, so nobody could
+ * ever manage them. They are retired the same way as expired polls.
+ */
+export function isLegacyPoll(poll: Poll): boolean {
+  return typeof poll.organizerCodeHash !== "string" || !poll.organizerCodeHash;
+}
+
+/** Removes expired and legacy polls from the array in place; returns how many were removed. */
 export function pruneExpiredPolls(polls: Poll[], now: Date): number {
   const before = polls.length;
-  const kept = polls.filter((poll) => !isPollExpired(poll, now));
+  const kept = polls.filter((poll) => !isPollExpired(poll, now) && !isLegacyPoll(poll));
   polls.splice(0, polls.length, ...kept);
   return before - kept.length;
 }

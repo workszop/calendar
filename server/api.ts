@@ -22,6 +22,7 @@ import {
   MAX_TIMEZONE_LENGTH,
   MAX_TITLE_LENGTH,
 } from "../src/utils/limits";
+import { codeMatches, EDIT_HEADER, hashCode, newCode, ORGANIZER_HEADER, readCodeHeader } from "./auth";
 import { createFilePollStore, type PollStore } from "./poll-store";
 import { isPollExpired, RETENTION_DAYS, withRetention, type Clock } from "./retention";
 
@@ -177,6 +178,45 @@ export function parseAvailability(input: unknown): ParsedAvailability {
   return { ok: true, value };
 }
 
+// ─── Public views ───
+
+/** Largest number of ids one "my polls" list request may ask for. */
+const MAX_LIST_IDS = 50;
+
+/**
+ * The poll as clients may see it: code hashes are always removed, and emails
+ * only reach the organizer.
+ */
+export function toPublicPoll(poll: Poll, isOrganizer: boolean): Poll {
+  const { organizerCodeHash: _organizerCodeHash, creatorEmail, participants, ...rest } = poll;
+  return {
+    ...rest,
+    ...(isOrganizer && creatorEmail ? { creatorEmail } : {}),
+    participants: participants.map(({ editCodeHash: _editCodeHash, email, ...participant }) => ({
+      ...participant,
+      ...(isOrganizer && email ? { email } : {}),
+    })),
+  };
+}
+
+function toSummary(poll: Poll): PollSummary {
+  return {
+    id: poll.id,
+    title: poll.title,
+    description: poll.description,
+    location: poll.location,
+    durationMinutes: poll.durationMinutes,
+    timezone: poll.timezone,
+    dates: poll.dates,
+    creatorName: poll.creatorName,
+    createdAt: poll.createdAt,
+    finalizedSlot: poll.finalizedSlot,
+    participantsCount: poll.participants.length,
+  };
+}
+
+const ORGANIZER_ONLY = "Only the organizer can do this. Enter the organizer code to unlock it.";
+
 export interface ApiOptions {
   /** Current time for poll retention; tests pin it so fixture dates never expire. */
   clock?: Clock;
@@ -187,6 +227,17 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
   const app = express();
   app.use("/api", (_req, res, next) => {
     res.set("Cache-Control", "no-store");
+    next();
+  });
+  // Mutations with a body must be JSON. Browsers cannot send that cross-site
+  // without a CORS preflight, which this API never grants.
+  app.use("/api", (req, res, next) => {
+    // Browsers send "Content-Length: 0" on a bodiless POST (e.g. reset); that has nothing to parse.
+    const hasBody = Number(req.headers["content-length"] ?? 0) > 0 || req.headers["transfer-encoding"] !== undefined;
+    if (req.method !== "GET" && hasBody && !req.is("application/json")) {
+      res.status(415).json({ error: "Requests must use Content-Type: application/json." });
+      return;
+    }
     next();
   });
   app.use(express.json({ limit: MAX_BODY_SIZE }));
@@ -213,23 +264,22 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   }));
 
-  // List all polls
-  app.get("/api/polls", wrap(async (_req, res) => {
+  // Summaries for the polls a browser knows about (?ids=a,b,c). There is no
+  // "list everything": a poll is only reachable by someone holding its link.
+  app.get("/api/polls", wrap(async (req, res) => {
+    const raw = typeof req.query.ids === "string" ? req.query.ids : "";
+    const ids = [...new Set(raw.split(",").map((id) => id.trim()).filter(Boolean))];
+    if (ids.length > MAX_LIST_IDS) {
+      res.status(400).json({ error: `Ask for at most ${MAX_LIST_IDS} polls at once.` });
+      return;
+    }
+    if (ids.length === 0) {
+      res.json([]);
+      return;
+    }
+    const wanted = new Set(ids);
     const polls = await pollStore.load();
-    const summaries: PollSummary[] = polls.map((p) => ({
-      id: p.id,
-      title: p.title,
-      description: p.description,
-      location: p.location,
-      durationMinutes: p.durationMinutes,
-      timezone: p.timezone,
-      dates: p.dates,
-      creatorName: p.creatorName,
-      createdAt: p.createdAt,
-      finalizedSlot: p.finalizedSlot,
-      participantsCount: p.participants.length,
-    }));
-    res.json(summaries);
+    res.json(polls.filter((poll) => wanted.has(poll.id)).map(toSummary));
   }));
 
   // Get single poll
@@ -240,7 +290,18 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       res.status(404).json({ error: "Poll not found" });
       return;
     }
-    res.json(poll);
+    res.json(toPublicPoll(poll, codeMatches(readCodeHeader(req, ORGANIZER_HEADER), poll.organizerCodeHash)));
+  }));
+
+  // Whether the presented organizer code unlocks this poll.
+  app.get("/api/polls/:id/access", wrap(async (req, res) => {
+    const polls = await pollStore.load();
+    const poll = polls.find((p) => p.id === req.params.id);
+    if (!poll) {
+      res.status(404).json({ error: "Poll not found" });
+      return;
+    }
+    res.json({ organizer: codeMatches(readCodeHeader(req, ORGANIZER_HEADER), poll.organizerCodeHash) });
   }));
 
   // ─── Routes: create ───
@@ -353,6 +414,8 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       }
 
       const id = "poll_" + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
+      // Returned exactly once; only its hash is stored.
+      const organizerCode = newCode();
       const newPoll: Poll = {
         id,
         title: body.title.trim(),
@@ -371,6 +434,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         createdAt: new Date().toISOString(),
         finalizedSlot: null,
         participants: [],
+        organizerCodeHash: hashCode(organizerCode),
       };
 
       // A poll that would be deleted immediately is almost certainly a mistake.
@@ -400,7 +464,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(503).json({ error: "The app has reached its poll limit. Please try again later." });
         return;
       }
-      res.status(201).json(newPoll);
+      res.status(201).json({ ...toPublicPoll(newPoll, true), organizerCode });
     })
   );
 
@@ -438,6 +502,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       }
 
       let failure: { status: number; error: string } | null = null;
+      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
       const poll = await pollStore.mutate((polls) => {
         failure = null;
@@ -448,6 +513,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           return null;
         };
 
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) return reject(403, ORGANIZER_ONLY);
         if (found.finalizedSlot) {
           return reject(409, "Re-open voting before adding dates.");
         }
@@ -486,7 +552,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(404).json({ error: "Poll not found" });
         return;
       }
-      res.json(poll);
+      res.json(toPublicPoll(poll, true));
     })
   );
 
@@ -495,14 +561,25 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
   app.delete(
     "/api/polls/:id",
     wrap(async (req, res) => {
+      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
+      let forbidden = false;
       const deleted = await pollStore.mutate((polls) => {
+        forbidden = false;
         const index = polls.findIndex((poll) => poll.id === req.params.id);
         // Nothing to remove: 404 without a write.
         if (index === -1) return null;
+        if (!codeMatches(organizerCode, polls[index].organizerCodeHash)) {
+          forbidden = true;
+          return null;
+        }
         polls.splice(index, 1);
         return { id: req.params.id };
       });
 
+      if (forbidden) {
+        res.status(403).json({ error: ORGANIZER_ONLY });
+        return;
+      }
       if (!deleted) {
         res.status(404).json({ error: "Poll not found" });
         return;
@@ -555,6 +632,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       let unknownParticipant = false;
       let invalidSlot: string | undefined;
       let pollFull = false;
+      let forbidden = false;
+      let isOrganizer = false;
+      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
+      const editCode = readCodeHeader(req, EDIT_HEADER);
+      // Only a brand-new response gets a code, and it is returned exactly once.
+      let issuedEditCode: string | undefined;
 
       const outcome = await pollStore.mutate((polls) => {
         // Blob CAS may replay this closure. Never let an earlier attempt's
@@ -562,16 +645,19 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         unknownParticipant = false;
         invalidSlot = undefined;
         pollFull = false;
+        forbidden = false;
+        issuedEditCode = undefined;
         const poll = polls.find((candidate) => candidate.id === req.params.id);
         if (!poll) return null;
+        isOrganizer = codeMatches(organizerCode, poll.organizerCodeHash);
         const proposed = new Set(poll.dates.flatMap((date) =>
           generateDaySlots(poll, date).map((time) => `${date}T${time}`)
         ));
         invalidSlot = Object.keys(parsedAvailability.value).find((key) => !proposed.has(key));
         if (invalidSlot) return null;
 
-        // A supplied id must resolve: falling back to a name match would let a
-        // stale id silently overwrite somebody else's response.
+        // Updating needs the response's edit code (or the organizer code). There
+        // is no name matching: without an id and code, a save is a new response.
         let existingIdx = -1;
         if (participantId) {
           existingIdx = poll.participants.findIndex((p) => p.id === participantId);
@@ -579,9 +665,10 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
             unknownParticipant = true;
             return null;
           }
-        } else {
-          const needle = name.trim().toLowerCase();
-          existingIdx = poll.participants.findIndex((p) => p.name.trim().toLowerCase() === needle);
+          if (!isOrganizer && !codeMatches(editCode, poll.participants[existingIdx].editCodeHash)) {
+            forbidden = true;
+            return null;
+          }
         }
 
         if (existingIdx === -1 && poll.participants.length >= MAX_PARTICIPANTS) {
@@ -595,6 +682,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
             ? poll.participants[existingIdx].id
             : "part_" + Math.random().toString(36).substring(2, 9);
 
+        if (existingIdx === -1) issuedEditCode = newCode();
         const responseEntry: ParticipantResponse = {
           id,
           name: name.trim(),
@@ -602,6 +690,9 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           timezone: optionalText(timezone) || poll.timezone,
           updatedAt: new Date().toISOString(),
           availability: parsedAvailability.value,
+          editCodeHash: issuedEditCode
+            ? hashCode(issuedEditCode)
+            : poll.participants[existingIdx].editCodeHash,
         };
 
         if (existingIdx >= 0) poll.participants[existingIdx] = responseEntry;
@@ -610,6 +701,10 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return { poll, participant: responseEntry };
       });
 
+      if (forbidden) {
+        res.status(403).json({ error: "This response can only be changed from the browser that saved it." });
+        return;
+      }
       if (pollFull) {
         res.status(409).json({ error: `This poll has reached its limit of ${MAX_PARTICIPANTS} responses.` });
         return;
@@ -624,7 +719,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           .json({ error: unknownParticipant ? "Participant not found" : "Poll not found" });
         return;
       }
-      res.json(outcome);
+      const publicPoll = toPublicPoll(outcome.poll, isOrganizer);
+      res.json({
+        poll: publicPoll,
+        participant: publicPoll.participants.find((p) => p.id === outcome.participant.id),
+        ...(issuedEditCode ? { editCode: issuedEditCode } : {}),
+      });
     })
   );
 
@@ -632,11 +732,18 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
     "/api/polls/:id/respond/:participantId",
     wrap(async (req, res) => {
       let unknownParticipant = false;
+      let forbidden = false;
+      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
       const poll = await pollStore.mutate((polls) => {
         unknownParticipant = false;
+        forbidden = false;
         const found = polls.find((candidate) => candidate.id === req.params.id);
         if (!found) return null;
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) {
+          forbidden = true;
+          return null;
+        }
         const remaining = found.participants.filter((p) => p.id !== req.params.participantId);
         // Nothing removed means the id was never here: 404 without a write.
         if (remaining.length === found.participants.length) {
@@ -647,13 +754,17 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return found;
       });
 
+      if (forbidden) {
+        res.status(403).json({ error: ORGANIZER_ONLY });
+        return;
+      }
       if (!poll) {
         res
           .status(404)
           .json({ error: unknownParticipant ? "Participant not found" : "Poll not found" });
         return;
       }
-      res.json(poll);
+      res.json(toPublicPoll(poll, true));
     })
   );
 
@@ -667,12 +778,17 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       // Validation that needs the poll runs inside the mutation, so there is
       // exactly one lookup and one 404 path.
       let failure: { status: number; error: string } | null = null;
+      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
       const poll = await pollStore.mutate((polls) => {
         // Validation may run again after a CAS conflict.
         failure = null;
         const found = polls.find((candidate) => candidate.id === req.params.id);
         if (!found) return null;
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) {
+          failure = { status: 403, error: ORGANIZER_ONLY };
+          return null;
+        }
         const reject = (error: string) => {
           failure = { status: 400, error };
           return null;
@@ -730,25 +846,36 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(404).json({ error: "Poll not found" });
         return;
       }
-      res.json(poll);
+      res.json(toPublicPoll(poll, true));
     })
   );
 
   app.post(
     "/api/polls/:id/reset",
     wrap(async (req, res) => {
+      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
+      let forbidden = false;
       const poll = await pollStore.mutate((polls) => {
+        forbidden = false;
         const found = polls.find((candidate) => candidate.id === req.params.id);
         if (!found) return null;
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) {
+          forbidden = true;
+          return null;
+        }
         found.finalizedSlot = null;
         return found;
       });
 
+      if (forbidden) {
+        res.status(403).json({ error: ORGANIZER_ONLY });
+        return;
+      }
       if (!poll) {
         res.status(404).json({ error: "Poll not found" });
         return;
       }
-      res.json(poll);
+      res.json(toPublicPoll(poll, true));
     })
   );
 
