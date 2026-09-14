@@ -152,6 +152,8 @@ describe('App navigation and home contract', () => {
     window.dispatchEvent(new PopStateEvent('popstate'));
     await screen.findByRole('heading', { name: 'P1' });
     expect(window.location.search).toBe('?poll=p1');
+    // Back/Forward is not a freshly opened shared link: keep the overview tab.
+    expect(screen.getByRole('tab', { name: 'Group overview' }).getAttribute('aria-selected')).toBe('true');
 
     window.history.pushState({}, '', '/');
     window.dispatchEvent(new PopStateEvent('popstate'));

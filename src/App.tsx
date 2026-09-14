@@ -206,11 +206,13 @@ export default function App() {
   // Root never chooses an arbitrary poll. A shared poll link intentionally
   // opens the answer tab, while Back/Forward with no query returns to home.
   const resolveInitialRoute = useCallback(
-    async (historyMode: 'push' | 'replace') => {
+    async (historyMode: 'push' | 'replace', isInitialLoad = false) => {
       const params = new URLSearchParams(window.location.search);
       const pollParam = params.get('poll');
       if (pollParam) {
-        setActiveTab('answer');
+        // Only a freshly opened shared link lands on the answer tab; Back/Forward
+        // leaves the current tab alone.
+        if (isInitialLoad) setActiveTab('answer');
         await fetchPoll(pollParam, historyMode);
         return;
       }
@@ -251,7 +253,7 @@ export default function App() {
     didInit.current = true;
     const init = async () => {
       await fetchPollsList();
-      await resolveInitialRoute('replace');
+      await resolveInitialRoute('replace', true);
     };
     void init();
   }, [fetchPollsList, resolveInitialRoute]);

@@ -120,6 +120,9 @@ export function useGridStroke(options: GridStrokeOptions): GridStroke {
   const cellProps = (key: string) => ({
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
       if (optionsRef.current.disabled) return;
+      // A locked cell (e.g. a finalized block) can still receive pointer events
+      // while its button is disabled; it must not start a stroke.
+      if (!optionsRef.current.hasCell(key)) return;
       // Left button only; a right-click or middle-click must not start painting.
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (e.pointerType !== 'mouse' && e.pointerType !== 'touch' && e.pointerType !== 'pen') return;

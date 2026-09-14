@@ -54,9 +54,12 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
     onBusyChange?.(busy);
   };
 
-  // Move focus to the first actionable error. There is no step transition to
-  // hide the target, so validation can focus it immediately.
+  // Move focus to the first actionable error, only right after a submit: clearing
+  // one error while the user fixes another must not pull focus away.
+  const focusErrorsRef = useRef(false);
   useEffect(() => {
+    if (!focusErrorsRef.current) return;
+    focusErrorsRef.current = false;
     if (errors.submit) {
       submitErrorRef.current?.focus();
       return;
@@ -93,6 +96,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
     // Keep only future dates in the draft before either displaying errors or
     // constructing the payload. setDates preserves every existing proposal.
     draft.setDates(validation.dates);
+    focusErrorsRef.current = true;
     setErrors(validation.errors);
     if (Object.keys(validation.errors).length > 0) return;
 
@@ -108,6 +112,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
       // here: it would navigate away from that transition on a successful POST.
     } catch (error) {
       console.error(error);
+      focusErrorsRef.current = true;
       setErrors({
         submit:
           error instanceof Error && error.message

@@ -205,6 +205,35 @@ describe('AvailabilityPainter display interval', () => {
     });
   });
 
+  it('keeps loaded answers when a stroke starts on a finalized cell', async () => {
+    const poll = makePoll({
+      endHour: 10,
+      finalizedSlot: {
+        date: '2026-10-01',
+        startTime: '09:00',
+        endTime: '09:30',
+        confirmedBy: 'Ada',
+        confirmedAt: '',
+      },
+      participants: [
+        {
+          id: 'participant-1',
+          name: 'Bob',
+          timezone: 'UTC',
+          updatedAt: '',
+          availability: { [key('09:30')]: 'preferred' },
+        },
+      ],
+    });
+    localStorage.setItem('timesync_user_name', 'Bob');
+    renderPainter(poll, 30);
+
+    await waitFor(() => expect(cell('09:30').dataset.status).toBe('preferred'));
+    finishPointerStroke(cell('09:00'));
+
+    expect(cell('09:30').dataset.status).toBe('preferred');
+  });
+
   it('renders a Mixed hourly block when atomic answers differ, with explicit coverage metadata', async () => {
     const poll = makePoll({
       endHour: 10,

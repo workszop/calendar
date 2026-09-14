@@ -165,6 +165,19 @@ describe('CreatePollPage', () => {
     expect(document.activeElement).toBe(screen.getByLabelText(/Meeting name/));
   });
 
+  it('keeps focus in the title while typing clears its validation error', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Create poll' }));
+    const titleInput = screen.getByLabelText(/Meeting name/);
+    expect(document.activeElement).toBe(titleInput);
+
+    fireEvent.change(titleInput, { target: { value: 'P' } });
+
+    expect(screen.queryByText('Give the meeting a title.')).toBeNull();
+    expect(screen.getByText('Select at least one candidate date.')).toBeTruthy();
+    expect(document.activeElement).toBe(titleInput);
+  });
+
   it('rejects a selected day with no proposed times', () => {
     const { onCreatePoll } = renderPage();
     fireEvent.change(screen.getByLabelText(/Meeting name/), { target: { value: 'Planning session' } });
