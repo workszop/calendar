@@ -100,27 +100,39 @@
   --blue: #1E8FC2; --blue-ink: #FFFFFF;
   --green: #00A651; --green-ink: #FFFFFF;
   --red: #E5322D; --red-ink: #FFFFFF;
+  --ui-body: 16px; --ui-small: 14px; --ui-caption: 12px;
+  --ui-title: clamp(30px, 3vw, 42px); --ui-heading: 24px;
+  --ui-align: left; --ui-center: center; --ui-end: right;
+  --page-gutter: clamp(16px, 3vw, 42px);
+  --header-surface: color-mix(in srgb, var(--paper) 94%, transparent);
   --r-xs: 6px; --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 28px; --r-pill: 999px;
   --focus-ring: 0 0 0 3px color-mix(in srgb, var(--yellow) 45%, transparent);
-  --scrim: color-mix(in srgb, #1C1917 55%, transparent);
+  --scrim: color-mix(in srgb, var(--ink) 55%, transparent);
 }
 
 /* ─── Base ─── */
+.d-shell-main {
+  padding: 32px var(--page-gutter) max(48px, var(--action-dock-space, 0px));
+}
+
 @layer base {
-  body { background: var(--paper); color: var(--ink); font-family: var(--font-sans); }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--font-sans);
+    font-size: var(--ui-body); text-align: var(--ui-align);
+  }
   h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.02em; }
-  :focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+  :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
 }
 
 /* ─── App chrome ─── */
 .edu-header {
   position: sticky; top: 0; z-index: 30; width: 100%;
-  background: rgba(255,255,255,.85);
+  background: var(--header-surface);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
 }
 .edu-header-inner {
-  max-width: 1100px; margin: 0 auto; padding: 8px 30px;
+  width: 100%; padding: 8px var(--page-gutter);
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
 .edu-logo { width: 64px; height: 64px; display: block; margin-right: -6px; }
@@ -128,7 +140,7 @@
 
 .app-title {
   font-family: var(--font-display); font-weight: 800;
-  font-size: clamp(2rem, 4.5vw, 2.85rem); letter-spacing: -.025em;
+  font-size: var(--ui-title); letter-spacing: -.025em;
   line-height: 1.05; color: var(--ink);
 }
 .edu-lead { font-size: 1.0625rem; color: var(--ink-2); margin: 0; }
@@ -139,9 +151,10 @@
 @layer components {
   .edu-input {
     width: 100%;
-    padding: 8px 12px;
-    font-size: 14px;
-    background: var(--paper-2);
+    min-height: 46px;
+    padding: 10px 14px;
+    font-size: var(--ui-small);
+    background: var(--surface);
     border: 1px solid var(--line-2);
     border-radius: var(--r-md);
     font-weight: 500;
@@ -155,13 +168,13 @@
 
   .edu-label {
     display: block;
-    font-family: var(--font-mono);
-    font-size: 12px;
+    font-family: var(--font-sans);
+    font-size: var(--ui-small);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .08em;
+    text-transform: none;
+    letter-spacing: normal;
     color: var(--ink-2);
-    margin-bottom: 4px;
+    margin-bottom: 8px;
   }
 
   .edu-btn-primary,
@@ -169,11 +182,13 @@
   .edu-btn-ghost {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    min-height: 44px;
     gap: 6px;
     padding: 8px 16px;
     border-radius: var(--r-pill);
     font-weight: 700;
-    font-size: 12px;
+    font-size: var(--ui-small);
     transition: background-color .15s;
   }
 
@@ -201,4 +216,16 @@
 
   /* Dialog backdrop - warm ink instead of pure black */
   .edu-scrim { background: var(--scrim); }
+}
+
+@media (max-width: 768px) {
+  .edu-header-inner { padding-block: 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
 }

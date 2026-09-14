@@ -1,81 +1,88 @@
-import type React from 'react';
-import { Share2, Plus, ListFilter, CheckCircle2, Home } from 'lucide-react';
+import React from 'react';
+import { ArrowLeft, CheckCircle2, Share2 } from 'lucide-react';
 import type { Poll } from '../types';
+import './home-page.css';
+
+// ─── Types ───
+
+export type HeaderScreen = 'home' | 'workspace' | 'create' | 'created';
 
 interface HeaderProps {
   poll: Poll | null;
-  onOpenNewPoll: () => void;
-  onOpenShare: () => void;
-  onOpenPollsList: () => void;
+  screen?: HeaderScreen;
+  onOpenShare?: () => void;
   onGoHome: () => void;
+  isBusy?: boolean;
 }
+
+// ─── Component ───
 
 export const Header: React.FC<HeaderProps> = ({
   poll,
-  onOpenNewPoll,
+  screen = 'workspace',
   onOpenShare,
-  onOpenPollsList,
   onGoHome,
+  isBusy = false,
 }) => {
-  // A real link, so middle-click and "open in new tab" still work; a plain
-  // click navigates in place without reloading the app.
-  const handleHomeClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    e.preventDefault();
-    onGoHome();
+  const showBack = screen !== 'home';
+
+  // A real link keeps middle-click and "open in new tab" useful. A primary
+  // click stays inside the SPA and is guarded while a create request is live.
+  const handleHomeClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (!isBusy) onGoHome();
   };
 
   return (
-    <header className="edu-header">
-      <div className="edu-header-inner md:justify-between">
-        {/* Brand */}
-        <div className="flex items-center gap-2">
+    <header className="edu-header d-shell-header">
+      <div className="edu-header-inner d-shell-header-inner">
+        <div className="d-shell-header-left">
           <a
             id="brand-home-link"
             href="/"
             onClick={handleHomeClick}
-            aria-label="edulab – home"
-            className="flex items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-900"
+            aria-label="edulab, home"
+            aria-disabled={isBusy ? 'true' : undefined}
+            className="d-shell-brand"
           >
             <img className="edu-logo" alt="" src="/edulab-mark-ink.png" />
             <span className="edu-wordmark">edulab</span>
           </a>
+          <span className="d-shell-context">Meeting scheduler</span>
           {poll?.finalizedSlot && (
-            <span className="ml-3 inline-flex items-center gap-1 text-[12px] font-bold font-mono uppercase tracking-wider text-white bg-green-500 px-2.5 py-1 rounded-full">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Time Agreed
+            <span className="d-shell-agreed">
+              <CheckCircle2 aria-hidden="true" />
+              Time agreed
             </span>
           )}
         </div>
 
-        {/* Action Controls & Utilities */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Home Button */}
-          <a id="home-button" href="/" onClick={handleHomeClick} className="edu-btn-secondary">
-            <Home className="w-3.5 h-3.5" aria-hidden="true" />
-            Home
-          </a>
-
-          {/* Browse Polls Button */}
-          <button id="browse-polls-button" type="button" onClick={onOpenPollsList} className="edu-btn-secondary">
-            <ListFilter className="w-3.5 h-3.5" />
-            All Polls
-          </button>
-
-          {/* Share Button */}
-          {poll && (
-            <button id="share-poll-button" type="button" onClick={onOpenShare} className="edu-btn-secondary">
-              <Share2 className="w-3.5 h-3.5" />
-              Share Link
+        {showBack && (
+          <div className="d-shell-header-actions">
+            <button
+              id="header-home"
+              type="button"
+              className="edu-btn-ghost d-shell-back"
+              onClick={onGoHome}
+              disabled={isBusy}
+            >
+              <ArrowLeft aria-hidden="true" />
+              All meetings
             </button>
-          )}
-
-          {/* Create Poll Button */}
-          <button id="create-new-poll-button" type="button" onClick={onOpenNewPoll} className="edu-btn-primary">
-            <Plus className="w-3.5 h-3.5" />
-            New Poll
-          </button>
-        </div>
+            {screen === 'workspace' && poll && onOpenShare && (
+              <button
+                id="share-poll-button"
+                type="button"
+                className="edu-btn-secondary d-shell-share"
+                onClick={onOpenShare}
+              >
+                <Share2 aria-hidden="true" />
+                Share link
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

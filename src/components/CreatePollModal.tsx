@@ -1,12 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Poll } from '../types';
-import { formatDateHeading, toDateStr } from '../utils/calendar';
-import { isValidHourWindow } from '../utils/consensus';
-import { getStoredUser, setStoredUser } from '../utils/storage';
+import { toDateStr } from '../utils/calendar';
 import { Modal } from './Modal';
 import { MonthCalendar, monthOfDateStr, startOfMonth } from './MonthCalendar';
-import { DRAFT_SLOT_INTERVAL, useProposalDraft } from '../hooks/useProposalDraft';
 import { ProposedTimesField } from './ProposedTimesField';
+import './create-poll.css';
+import {
+  buildCreatePollPayload,
+  getNextDates,
+  getNextWeekDates,
+  rememberCreatePollOrganizer,
+  type CreatePollFormErrors,
+  useCreatePollForm,
+  validateCreatePoll,
+} from './create-poll-form';
 
 // ─── Types ───
 interface CreatePollModalProps {
@@ -16,36 +23,6 @@ interface CreatePollModalProps {
   defaultTimezone: string;
 }
 
-interface FormErrors {
-  title?: string;
-  dates?: string;
-  hours?: string;
-  submit?: string;
-}
-
-// ─── Constants ───
-const DEFAULT_START_HOUR = 9;
-const DEFAULT_END_HOUR = 17;
-
-// ─── Helpers ───
-function getNextDates(count: number, startOffset = 1): string[] {
-  const now = new Date();
-  return Array.from({ length: count }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + startOffset + i);
-    return toDateStr(d);
-  });
-}
-
-function getNextWeekDates(): string[] {
-  // Next Monday through Friday
-  const now = new Date();
-  const daysUntilNextMonday = ((1 + 7 - now.getDay()) % 7) || 7;
-  return Array.from({ length: 5 }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysUntilNextMonday + i);
-    return toDateStr(d);
-  });
-}
-
 // ─── Component ───
 export const CreatePollModal: React.FC<CreatePollModalProps> = ({
   isOpen,
@@ -53,17 +30,13 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
   onCreatePoll,
   defaultTimezone,
 }) => {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [location, setLocation] = useState('Google Meet');
-  const [durationMinutes, setDurationMinutes] = useState(60);
-  const [creatorName, setCreatorName] = useState('');
-  const [creatorEmail, setCreatorEmail] = useState('');
-  const draft = useProposalDraft(DEFAULT_START_HOUR, DEFAULT_END_HOUR);
-  const { selectedDates, startHour, endHour } = draft;
+  const form = useCreatePollForm('Google Meet');
+  const { title, description, location, durationMinutes, creatorName, creatorEmail, draft } = form;
+  const { selectedDates } = draft;
   const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [errors, setErrors] = useState<CreatePollFormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitGuardRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
 
   // A pending create must own the modal until it resolves. This covers the
@@ -79,18 +52,12 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
   // A fresh draft every time the modal opens, so nothing leaks between polls.
   useEffect(() => {
     if (!isOpen) return;
-    const stored = getStoredUser();
-    setTitle('');
-    setDescription('');
-    setLocation('Google Meet');
-    setDurationMinutes(60);
-    setCreatorName(stored.name);
-    setCreatorEmail(stored.email);
     // No dates are preselected: the organizer picks them (or uses a preset).
-    draft.reset(DEFAULT_START_HOUR, DEFAULT_END_HOUR);
+    form.reset({ location: 'Google Meet' });
     setViewMonth(startOfMonth(new Date()));
     setErrors({});
     setIsSubmitting(false);
+    submitGuardRef.current = false;
   }, [isOpen]);
 
   const toggleDate = (dateStr: string) => {
@@ -107,55 +74,31 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Past days may still sit in the selection if the modal stayed open past midnight.
-    const dates = selectedDates.filter((d) => d >= todayStr);
-    const nextErrors: FormErrors = {};
+    if (isSubmitting || submitGuardRef.current) return;
 
-    if (!title.trim()) nextErrors.title = 'Give the meeting a title.';
-    if (dates.length === 0) nextErrors.dates = 'Select at least one candidate date.';
-    if (!isValidHourWindow(startHour, endHour)) {
-      nextErrors.hours = 'Start hour must be earlier than end hour.';
-    } else {
-      const emptyDay = draft.findEmptyDay(dates);
-      if (emptyDay) {
-        nextErrors.hours = `${formatDateHeading(emptyDay).full}: propose at least one time.`;
-      }
-    }
+    const { dates, errors: nextErrors } = validateCreatePoll({ title, draft }, todayStr);
 
     draft.setDates(dates);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
-    // A plain hour window is sent when every day proposes the full range.
-    const { proposedSlots, isFullRange } = draft.slotsFor(dates);
-
+    submitGuardRef.current = true;
     setIsSubmitting(true);
-    // Both fields are optional: leaving one blank must not wipe a stored value.
-    setStoredUser({
-      name: creatorName.trim() || undefined,
-      email: creatorEmail.trim() || undefined,
-    });
+    rememberCreatePollOrganizer({ creatorName, creatorEmail });
 
     try {
-      await onCreatePoll({
-        title: title.trim(),
-        description: description.trim(),
-        location: location.trim(),
-        durationMinutes,
-        startHour,
-        endHour,
-        proposedSlots: isFullRange ? undefined : proposedSlots,
-        slotInterval: DRAFT_SLOT_INTERVAL,
-        dates,
-        creatorName: creatorName.trim() || 'Organizer',
-        creatorEmail: creatorEmail.trim(),
-        timezone: defaultTimezone,
-      });
+      await onCreatePoll(buildCreatePollPayload(form, dates, defaultTimezone));
       onClose();
     } catch (err) {
       console.error(err);
-      setErrors({ submit: 'Failed to create the meeting poll. Please try again.' });
+      setErrors({
+        submit:
+          err instanceof Error && err.message
+            ? err.message
+            : 'Failed to create the meeting poll. Please try again.',
+      });
     } finally {
+      submitGuardRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -170,7 +113,15 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
       initialFocusRef={titleInputRef}
       dismissOnBackdrop={false}
     >
-      <form onSubmit={handleSubmit} className="space-y-5" noValidate aria-busy={isSubmitting}>
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-5"
+        noValidate
+        aria-busy={isSubmitting}
+        data-create-form="true"
+        data-selection-count={selectedDates.length}
+        data-save-state={isSubmitting ? 'saving' : errors.submit ? 'error' : 'idle'}
+      >
         {errors.submit && (
           <div role="alert" className="bg-red-500 text-white rounded-xl px-4 py-3 text-xs font-semibold">
             {errors.submit}
@@ -191,7 +142,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
             aria-describedby={errors.title ? 'poll-title-error' : undefined}
             value={title}
             onChange={(e) => {
-              setTitle(e.target.value);
+              form.setTitle(e.target.value);
               if (errors.title) setErrors((prev) => ({ ...prev, title: undefined }));
             }}
             placeholder="e.g. Q4 Strategy and Roadmap Alignment"
@@ -214,7 +165,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
               id="poll-location-input"
               type="text"
               value={location}
-              onChange={(e) => setLocation(e.target.value)}
+              onChange={(e) => form.setLocation(e.target.value)}
               placeholder="e.g. Google Meet, Zoom, Room 3A"
               className="edu-input"
             />
@@ -227,7 +178,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
             <select
               id="poll-duration-select"
               value={durationMinutes}
-              onChange={(e) => setDurationMinutes(Number(e.target.value))}
+              onChange={(e) => form.setDurationMinutes(Number(e.target.value))}
               className="edu-input"
             >
               <option value={15}>15 Minutes</option>
@@ -248,7 +199,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
             id="poll-description-input"
             rows={2}
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => form.setDescription(e.target.value)}
             placeholder="What is this meeting about? Any prep required?"
             className="edu-input"
           />
@@ -312,7 +263,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
               id="poll-creator-name"
               type="text"
               value={creatorName}
-              onChange={(e) => setCreatorName(e.target.value)}
+              onChange={(e) => form.setCreatorName(e.target.value)}
               placeholder="e.g. Sarah Chen"
               className="edu-input"
             />
@@ -326,7 +277,7 @@ export const CreatePollModal: React.FC<CreatePollModalProps> = ({
               id="poll-creator-email"
               type="email"
               value={creatorEmail}
-              onChange={(e) => setCreatorEmail(e.target.value)}
+              onChange={(e) => form.setCreatorEmail(e.target.value)}
               placeholder="sarah@company.com"
               className="edu-input"
             />

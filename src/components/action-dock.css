@@ -1,0 +1,20 @@
+/* ─── Persistent primary actions ─── */
+html { scroll-padding-bottom: var(--action-dock-space, 0px); }
+
+.d-action-dock {
+  position: fixed;
+  inset-inline: 0;
+  z-index: 40;
+  padding: 12px var(--page-gutter) max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line-2);
+  background: var(--surface);
+  box-shadow: 0 -4px 18px color-mix(in srgb, var(--ink) 8%, transparent);
+  text-align: var(--ui-align);
+}
+
+.d-action-dock button { min-height: 44px; }
+.d-action-dock > * { min-width: 0; }
+
+@media (max-width: 768px) {
+  .d-action-dock { padding-top: 10px; }
+}

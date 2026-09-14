@@ -1,0 +1,452 @@
+/* ─── Single-view poll creation ─── */
+.d-create-page {
+  width: 100%;
+  color: var(--ink);
+}
+
+.d-create-page,
+.d-create-page button,
+.d-create-page input,
+.d-create-page select,
+.d-create-page textarea {
+  font-family: var(--font-sans);
+}
+
+.d-create-page h1,
+.d-create-page h2,
+.d-create-page h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.d-create-page h1 {
+  font-size: var(--ui-title);
+  line-height: 1.1;
+}
+
+.d-create-page h2,
+.d-create-page h3 {
+  line-height: 1.15;
+}
+
+.d-create-page p {
+  margin: 0;
+}
+
+.d-create-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.d-create-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.35rem;
+}
+
+.d-create-header-copy {
+  min-width: 0;
+}
+
+.d-create-lead {
+  max-width: 52rem;
+  margin-top: 0.5rem !important;
+  color: var(--ink-2);
+  font-size: var(--ui-body);
+}
+
+.d-create-layout,
+.d-create-form {
+  width: 100%;
+}
+
+.d-create-form {
+  min-width: 0;
+}
+
+.d-create-alert {
+  margin-bottom: 1rem !important;
+  padding: 0.8rem 1rem;
+  border-radius: var(--r-md);
+  background: var(--red);
+  color: var(--red-ink);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.d-create-top-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(22rem, 1.18fr);
+  align-items: start;
+  gap: clamp(1.5rem, 4vw, 4rem);
+}
+
+.d-create-details-panel,
+.d-create-date-panel {
+  min-width: 0;
+}
+
+.d-create-date-panel {
+  padding-left: clamp(0rem, 2.5vw, 2.25rem);
+  border-left: 1px solid var(--line);
+}
+
+.d-create-section-heading {
+  margin: 0;
+  font-size: var(--ui-heading);
+}
+
+.d-create-section-heading-row,
+.d-create-times-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.d-create-form-intro {
+  margin-top: 0.45rem !important;
+  margin-bottom: 1.05rem !important;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+}
+
+.d-create-field-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.d-create-label,
+.d-create-field-stack label,
+.d-create-field-stack legend {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.d-create-label-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.d-create-required,
+.d-create-optional-label {
+  color: var(--ink-3);
+  font-size: var(--ui-caption);
+  font-weight: 400;
+}
+
+.d-create-title-input {
+  min-height: 3.25rem;
+  font-size: var(--ui-heading) !important;
+  font-weight: 500 !important;
+}
+
+.d-create-duration-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.d-create-duration-options button {
+  min-width: 3.3rem;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 600;
+}
+
+.d-create-duration-options button:hover {
+  background: var(--paper-2);
+}
+
+.d-create-duration-options button[aria-pressed='true'] {
+  border-color: var(--yellow);
+  background: var(--yellow);
+  color: var(--yellow-ink);
+}
+
+.d-create-hint {
+  margin-top: 0.45rem !important;
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+}
+
+.d-create-optional {
+  margin-top: 0.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--paper-2);
+  padding: 0.15rem 0.9rem 0.9rem;
+}
+
+.d-create-optional-wide {
+  margin-top: 1.1rem;
+}
+
+.d-create-optional summary {
+  min-height: 2.55rem;
+  align-content: center;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.d-create-optional[open] > summary {
+  margin-bottom: 0.85rem;
+}
+
+.d-create-optional-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.d-create-optional-grid .d-create-wide {
+  grid-column: 1 / -1;
+}
+
+.d-create-optional-grid label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.d-create-date-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+
+.d-create-date-presets button {
+  min-height: 2.15rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 600;
+}
+
+.d-create-date-presets button:hover {
+  background: var(--paper-2);
+}
+
+.d-create-selection-count {
+  margin-top: 0.55rem !important;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+}
+
+.d-create-selected-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.d-create-selected-day {
+  min-height: 2rem;
+  padding: 0.35rem 0.6rem;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 600;
+}
+
+.d-create-selected-day:hover {
+  background: var(--paper-3);
+}
+
+.d-create-times-section {
+  min-width: 0;
+  margin-top: 1.75rem;
+  padding-top: 1.35rem;
+  border-top: 1px solid var(--line);
+}
+
+.d-create-times-heading-row {
+  align-items: flex-start;
+  margin-bottom: 0.8rem;
+}
+
+.d-create-times-heading-row .d-create-form-intro {
+  max-width: 52rem;
+  margin-bottom: 0 !important;
+}
+
+.d-create-timezone {
+  flex: 0 0 auto;
+  margin-top: 0.1rem !important;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--ui-caption);
+  white-space: nowrap;
+}
+
+.d-create-error {
+  margin-top: 0.35rem !important;
+  color: var(--red);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.d-create-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.d-create-form-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+.d-create-form-footer .d-create-primary,
+.d-create-form-footer .d-create-secondary {
+  min-height: 2.75rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: var(--r-pill);
+  font-size: var(--ui-small);
+  font-weight: 700;
+}
+
+.d-create-primary {
+  border: 1px solid var(--yellow);
+  background: var(--yellow);
+  color: var(--yellow-ink);
+}
+
+.d-create-primary:hover {
+  background: var(--yellow-600);
+}
+
+.d-create-primary:disabled,
+.d-create-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.d-create-secondary {
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.d-create-secondary:hover {
+  background: var(--paper-2);
+}
+
+/* The editor owns its grid width. Keep a narrow viewport from forcing the
+   page itself wider when several candidate days are selected. */
+.d-create-times-section > [data-day-times-editor] {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+@media (max-width: 980px) {
+  .d-create-top-grid {
+    grid-template-columns: minmax(0, 0.9fr) minmax(19rem, 1.1fr);
+    gap: 1.5rem;
+  }
+
+  .d-create-date-panel {
+    padding-left: 1.25rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .d-create-header {
+    margin-bottom: 1rem;
+  }
+
+  .d-create-lead,
+  .d-create-details-panel .d-create-hint {
+    display: none;
+  }
+
+  .d-create-top-grid {
+    grid-template-columns: 1fr;
+    gap: 1.35rem;
+  }
+
+  .d-create-date-panel {
+    padding-top: 1.15rem;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .d-create-optional-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .d-create-optional-grid .d-create-wide {
+    grid-column: auto;
+  }
+
+  .d-create-times-section {
+    margin-top: 1.35rem;
+    padding-top: 1.1rem;
+  }
+
+  .d-create-duration-options {
+    gap: 0.25rem;
+  }
+
+  .d-create-duration-options button {
+    min-width: 3.1rem;
+    padding-inline: 0.35rem;
+  }
+
+  .d-create-times-heading-row {
+    display: block;
+  }
+
+  .d-create-timezone {
+    margin-top: 0.65rem !important;
+  }
+
+  .d-create-form-footer {
+    gap: 0.55rem;
+  }
+
+  .d-create-form-footer-actions {
+    width: auto;
+    margin-left: auto;
+  }
+
+  .d-create-form-footer-actions .d-create-primary,
+  .d-create-form-footer-actions .d-create-secondary {
+    flex: 1;
+    min-height: 2.75rem;
+    padding-inline: 0.8rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .d-create-page * {
+    transition: none !important;
+  }
+}

@@ -30,7 +30,7 @@ export interface ProposalDraft {
   slotsFor: (dates: string[]) => { proposedSlots: Record<string, string[]>; isFullRange: boolean };
 }
 
-export function useProposalDraft(initialStart: number, initialEnd: number): ProposalDraft {
+export function useProposalDraft(initialStart: number, initialEnd: number, initiallyEmpty = false): ProposalDraft {
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [startHour, setStartHour] = useState(initialStart);
   const [endHour, setEndHour] = useState(initialEnd);
@@ -39,12 +39,18 @@ export function useProposalDraft(initialStart: number, initialEnd: number): Prop
 
   const gridTimes = useMemo(() => rangeTimes(startHour, endHour), [startHour, endHour]);
 
-  // A newly selected date proposes the whole hour range; the organizer trims it.
-  // Proposals are only added or dropped per date, so each toggle can update
-  // them independently and quick successive clicks never overwrite each other.
+  // A newly selected date proposes the whole hour range in the legacy mode;
+  // the creation page opts into an empty date so each atomic choice is
+  // deliberate. Proposals are only added or dropped per date, so each toggle
+  // can update them independently and quick successive clicks never overwrite
+  // each other.
   const setDates = (dates: string[]) => {
     setSelectedDates(dates);
-    setProposed((prev) => Object.fromEntries(dates.map((d) => [d, prev[d] ?? rangeTimes(startHour, endHour)])));
+    setProposed((prev) =>
+      Object.fromEntries(
+        dates.map((d) => [d, prev[d] ?? (initiallyEmpty ? [] : rangeTimes(startHour, endHour))])
+      )
+    );
   };
 
   const toggleDate = (date: string) => {
@@ -52,13 +58,14 @@ export function useProposalDraft(initialStart: number, initialEnd: number): Prop
     setProposed((prev) => {
       const next = { ...prev };
       if (next[date]) delete next[date];
-      else next[date] = rangeTimes(startHour, endHour);
+      else next[date] = initiallyEmpty ? [] : rangeTimes(startHour, endHour);
       return next;
     });
   };
 
-  // Changing the range keeps each day's picks inside it and proposes rows that
-  // just became visible, so widening the range extends every day.
+  // Changing the range keeps each day's picks inside it. Legacy callers also
+  // propose rows that just became visible, while the creation editor leaves
+  // newly visible rows empty so widening cannot silently add availability.
   const changeRange = (nextStart: number, nextEnd: number) => {
     setStartHour(nextStart);
     setEndHour(nextEnd);
@@ -71,7 +78,12 @@ export function useProposalDraft(initialStart: number, initialEnd: number): Prop
       Object.fromEntries(
         Object.entries(prev).map(([d, times]) => [
           d,
-          [...new Set([...times.filter((t) => after.includes(t)), ...added])].sort(),
+          [
+            ...new Set([
+              ...times.filter((t) => after.includes(t)),
+              ...(initiallyEmpty ? [] : added),
+            ]),
+          ].sort(),
         ])
       )
     );

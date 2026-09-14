@@ -67,6 +67,132 @@ async function savePainter() {
 }
 
 describe('AvailabilityPainter display interval', () => {
+  it('starts with an Available task grid and places identity and save after it', () => {
+    renderPainter(makePoll(), 30);
+
+    const grid = document.querySelector<HTMLElement>('[data-answer-grid]');
+    const footer = document.querySelector<HTMLElement>('[data-answer-footer]');
+    expect(grid).toBeTruthy();
+    expect(footer).toBeTruthy();
+    expect(Boolean(grid && footer && (grid.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    expect(screen.getByRole('radio', { name: 'Available' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText(/When can you make it\?/i)).toBeTruthy();
+  });
+
+  it('keeps the name and save action in one persistent dock while email stays in normal flow', () => {
+    renderPainter(makePoll(), 30);
+
+    const form = document.querySelector<HTMLFormElement>('[data-answer-footer]');
+    const dock = document.querySelector<HTMLElement>('[data-action-dock]');
+    const name = screen.getByLabelText(/Your Name/);
+    const email = screen.getByLabelText(/Your Email/);
+    const save = screen.getByRole('button', { name: 'Save My Availability' });
+
+    expect(form).toBeTruthy();
+    expect(dock).toBeTruthy();
+    expect(name.closest('[data-action-dock]')).toBe(dock);
+    expect(save.closest('[data-action-dock]')).toBe(dock);
+    expect(email.closest('[data-action-dock]')).toBeNull();
+    expect(email.closest('form')).toBe(form);
+    expect(dock?.closest('form')).toBe(form);
+    expect(document.querySelectorAll('[data-action-dock]')).toHaveLength(1);
+  });
+
+  it('blocks malformed optional email before submitting from the dock', () => {
+    const { onSaveAvailability } = renderPainter(makePoll(), 30);
+    fireEvent.change(screen.getByLabelText(/Your Name/), { target: { value: 'Ada' } });
+    const email = screen.getByLabelText(/Your Email/) as HTMLInputElement;
+    fireEvent.change(email, { target: { value: 'not-an-email' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+    expect(email.validity.typeMismatch).toBe(true);
+    expect(onSaveAvailability).not.toHaveBeenCalled();
+  });
+
+  it('focuses the name field when save validation fails in the dock', () => {
+    renderPainter(makePoll(), 30);
+
+    const name = screen.getByLabelText(/Your Name/) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(name);
+    expect(screen.getByRole('alert').textContent).toContain('Enter your name to save your availability.');
+  });
+
+  it('keeps nuance tools disclosed and publishes explicit save state', async () => {
+    let resolveSave: (() => void) | undefined;
+    const onSaveAvailability = vi.fn().mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      })
+    );
+    renderPainter(makePoll(), 30, onSaveAvailability);
+
+    expect(screen.queryByRole('button', { name: 'Preferred' })).toBeNull();
+    fireEvent.click(screen.getByText('More answer options'));
+    expect(screen.getByRole('radio', { name: 'Preferred' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/Your Name/), { target: { value: 'New Person' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+    expect(document.querySelector('[data-answer-footer]')?.getAttribute('data-save-state')).toBe('saving');
+
+    resolveSave?.();
+    await waitFor(() => expect(document.querySelector('[data-answer-footer]')?.getAttribute('data-save-state')).toBe('saved'));
+  });
+
+  it('focuses the selected nuance brush after opening its disclosure with the keyboard', async () => {
+    renderPainter(makePoll(), 30);
+
+    const available = screen.getByRole('radio', { name: 'Available' });
+    available.focus();
+    fireEvent.keyDown(available, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      const preferred = screen.getByRole('radio', { name: 'Preferred' });
+      expect(preferred.closest('details')?.hasAttribute('open')).toBe(true);
+      expect(preferred).toBe(document.activeElement);
+    });
+  });
+
+  it('preserves finalized answers when Select All is used before saving', async () => {
+    const poll = makePoll({
+      endHour: 10,
+      finalizedSlot: {
+        date: '2026-10-01',
+        startTime: '09:00',
+        endTime: '09:30',
+        confirmedBy: 'Ada',
+        confirmedAt: '',
+      },
+      participants: [
+        {
+          id: 'participant-1',
+          name: 'Bob',
+          timezone: 'UTC',
+          updatedAt: '',
+          availability: {
+            [key('09:00')]: 'preferred',
+            [key('09:30')]: 'unavailable',
+          },
+        },
+      ],
+    });
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    localStorage.setItem('timesync_user_name', 'Bob');
+    renderPainter(poll, 30, onSaveAvailability);
+
+    await waitFor(() => expect(cell('09:00').dataset.status).toBe('preferred'));
+    fireEvent.click(screen.getByText('Quick fill tools'));
+    fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+
+    await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
+    expect(onSaveAvailability.mock.calls[0]?.[2]).toEqual({
+      [key('09:00')]: 'preferred',
+      [key('09:30')]: 'available',
+    });
+  });
+
   it('renders a Mixed hourly block when atomic answers differ, with explicit coverage metadata', async () => {
     const poll = makePoll({
       endHour: 10,

@@ -1,0 +1,444 @@
+/* ─── Day-by-day proposal editor ─── */
+.day-times-editor {
+  --day-times-column-width: 10.5rem;
+  --day-times-cell-height: 2.15rem;
+  --day-times-selected: var(--yellow);
+  --day-times-selected-ink: var(--yellow-ink);
+  --day-times-unselected: var(--surface);
+  --day-times-boundary: var(--ink-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+}
+
+.day-times-editor:disabled {
+  opacity: 0.72;
+}
+
+.day-times-legend {
+  margin-bottom: 0.65rem;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.day-times-range-row {
+  display: flex;
+  align-items: end;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.day-times-range-control {
+  display: grid;
+  flex: 1 1 0;
+  gap: 0.3rem;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 600;
+}
+
+.day-times-range-control select {
+  min-height: 2.55rem;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.day-times-range-control select:focus-visible {
+  border-color: var(--yellow);
+  box-shadow: var(--focus-ring);
+}
+
+.day-times-range-control select:disabled {
+  cursor: not-allowed;
+}
+
+.day-times-range-separator {
+  flex: 0 0 auto;
+  padding-bottom: 0.65rem;
+  color: var(--ink-3);
+  font-size: var(--ui-caption);
+}
+
+.day-times-range-note,
+.day-times-instructions {
+  margin: 0.45rem 0 0;
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  line-height: 1.45;
+}
+
+.day-times-instructions {
+  margin-top: 0.75rem;
+}
+
+.day-times-touch-hint {
+  display: none;
+  margin-top: 0.2rem;
+  color: var(--ink-3);
+}
+
+.day-times-grid-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 0.65rem;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.day-times-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.day-times-table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.day-times-table th,
+.day-times-table td {
+  border-bottom: 1px solid var(--line);
+}
+
+.day-times-table tbody tr:last-child th,
+.day-times-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.day-times-time-heading,
+.day-times-time-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 5.25rem;
+  min-width: 5.25rem;
+  background: var(--surface);
+  text-align: left;
+}
+
+.day-times-time-heading {
+  z-index: 4;
+  padding: 0.65rem 0.7rem;
+  border-right: 1px solid var(--line-2);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 700;
+}
+
+.day-times-time-label {
+  padding: 0.35rem 0.7rem;
+  border-right: 1px solid var(--line-2);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.day-times-day-column {
+  width: var(--day-times-column-width);
+  min-width: var(--day-times-column-width);
+  padding: 0;
+  vertical-align: top;
+  background: var(--paper-2);
+  text-align: left;
+}
+
+.day-times-day-column:not(:last-child),
+.day-times-slot-cell:not(:last-child) {
+  border-right: 1px solid var(--line);
+}
+
+.day-times-day-header {
+  display: grid;
+  gap: 0.45rem;
+  min-height: 7.6rem;
+  padding: 0.7rem;
+}
+
+.day-times-day-copy {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.day-times-weekday {
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--ui-caption);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.day-times-day-month {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--ui-small);
+  font-weight: 700;
+}
+
+.day-times-day-count {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--ui-caption);
+}
+
+.day-times-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: start;
+  gap: 0.3rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 700;
+  text-align: center;
+}
+
+.day-times-copy-button svg,
+.day-times-copy-close svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+}
+
+.day-times-copy-button:hover,
+.day-times-copy-button:focus-visible {
+  border-color: var(--yellow-600);
+  background: var(--paper);
+}
+
+.day-times-copy-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.day-times-range-summary {
+  min-height: 1.1rem;
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  line-height: 1.35;
+}
+
+.day-times-slot-cell {
+  width: var(--day-times-column-width);
+  min-width: var(--day-times-column-width);
+  padding: 0.2rem;
+  background: var(--surface);
+}
+
+.day-times-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: var(--day-times-cell-height);
+  padding: 0.15rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+  background: var(--day-times-unselected);
+  color: var(--ink-2);
+  font-size: var(--ui-caption);
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.day-times-cell:hover {
+  border-color: var(--yellow-600);
+  background: var(--paper-2);
+}
+
+.day-times-cell--selected {
+  border-color: var(--yellow-600);
+  background: var(--day-times-selected);
+  color: var(--day-times-selected-ink);
+}
+
+.day-times-cell--selected:hover {
+  background: var(--yellow-600);
+}
+
+.day-times-cell--range-start {
+  border-top-left-radius: var(--r-sm);
+  border-top-right-radius: var(--r-sm);
+}
+
+.day-times-cell--range-end {
+  border-bottom-left-radius: var(--r-sm);
+  border-bottom-right-radius: var(--r-sm);
+}
+
+.day-times-check {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.day-times-boundary {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--ui-caption);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-times-boundary--start::before {
+  content: 'Start ';
+}
+
+.day-times-boundary--end::before {
+  content: 'End ';
+}
+
+.day-times-empty {
+  margin: 0;
+  padding: 1rem;
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+}
+
+.day-times-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.day-times-copy-dialog {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.day-times-copy-modal {
+  max-width: 30rem;
+}
+
+.day-times-copy-destinations {
+  display: grid;
+  gap: 0.45rem;
+  max-height: min(22rem, 48vh);
+  overflow-y: auto;
+}
+
+.day-times-copy-destination {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+.day-times-copy-destination:has(input:checked) {
+  border-color: var(--yellow-600);
+  background: var(--yellow);
+  color: var(--yellow-ink);
+}
+
+.day-times-copy-destination input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--blue);
+}
+
+.day-times-copy-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.day-times-copy-cancel,
+.day-times-copy-apply {
+  min-height: 2.45rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: var(--r-pill);
+  font-size: var(--ui-caption);
+  font-weight: 700;
+}
+
+.day-times-copy-cancel {
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.day-times-copy-apply {
+  border: 1px solid var(--yellow);
+  background: var(--yellow);
+  color: var(--yellow-ink);
+}
+
+.day-times-copy-apply:disabled,
+.day-times-copy-cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.day-times-error {
+  margin: 0.55rem 0 0;
+  color: var(--red);
+  font-size: var(--ui-small);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .day-times-touch-hint {
+    display: block;
+  }
+
+  .day-times-day-header {
+    min-height: 7.2rem;
+  }
+
+  .day-times-copy-button span {
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .day-times-cell {
+    transition: none;
+  }
+}
