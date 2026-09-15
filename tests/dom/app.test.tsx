@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement as h } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import App from '../../src/App';
+import App, { apiRetry } from '../../src/App';
 import type { Poll, PollSummary } from '../../src/types';
 
 // The home page lists only polls this browser knows; these fixtures are "created here".
 beforeEach(() => {
+  apiRetry.baseDelayMs = 0;
   localStorage.setItem(
     'timesync_organizer_codes',
     JSON.stringify({ p1: 'code-p1', p2: 'code-p2', old: 'code-old', current: 'code-current' })
@@ -106,6 +107,7 @@ describe('App navigation and home contract', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = route(input);
       if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll1), summary(poll2)]));
+      if (url === '/api/polls/p2/access') return Promise.resolve(jsonResponse({ organizer: true }));
       if (url === '/api/polls/p2') return Promise.resolve(jsonResponse(poll2));
       throw new Error(`Unexpected ${url}`);
     });
@@ -116,7 +118,12 @@ describe('App navigation and home contract', () => {
     await screen.findByRole('heading', { name: 'P2' });
 
     expect(document.querySelector('[data-active-poll-id]')?.getAttribute('data-active-poll-id')).toBe('p2');
-    expect(fetchMock.mock.calls.map(([request]) => route(request))).toEqual(['/api/polls', '/api/polls/p2']);
+    // The stored organizer code is verified once, alongside the poll load.
+    expect(fetchMock.mock.calls.map(([request]) => route(request))).toEqual([
+      '/api/polls',
+      '/api/polls/p2/access',
+      '/api/polls/p2',
+    ]);
     expect(screen.queryByText('P1')).toBeNull();
     expect(screen.getByRole('tab', { name: 'My answer' }).getAttribute('aria-selected')).toBe('true');
   });
@@ -319,7 +326,10 @@ describe('App navigation and home contract', () => {
         listCalls += 1;
         return Promise.resolve(jsonResponse(listCalls === 1 ? [] : [summary(created)]));
       }
-      if (url === '/api/polls' && init?.method === 'POST') return Promise.resolve(jsonResponse(created, 201));
+      if (url === '/api/polls' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ ...created, organizerCode: 'created-code' }, 201));
+      }
+      if (url === '/api/polls/created/access') return Promise.resolve(jsonResponse({ organizer: true }));
       if (url === '/api/polls/created') return Promise.resolve(jsonResponse(created));
       throw new Error(`Unexpected ${init?.method ?? 'GET'} ${url}`);
     });
@@ -350,6 +360,10 @@ describe('App navigation and home contract', () => {
     window.history.pushState({}, '', '/?created=created');
     window.dispatchEvent(new PopStateEvent('popstate'));
     await screen.findByRole('heading', { name: 'Your poll is ready to share.' });
+    // Back after "Open poll" still offers the code with the save-it-now prompt.
+    expect(document.querySelector('[data-organizer-code-panel="prompt"]')).toBeTruthy();
+    expect(screen.getByDisplayValue('created-code')).toBeTruthy();
+    expect(screen.getByText(/Save this code now/)).toBeTruthy();
   });
 
   it('keeps Add dates available in the real poll workspace', async () => {
@@ -367,5 +381,80 @@ describe('App navigation and home contract', () => {
     await screen.findByRole('heading', { name: 'Extendable' });
     fireEvent.click(document.getElementById('add-dates-button')!);
     expect(screen.getByRole('dialog', { name: 'Add Dates' })).toBeTruthy();
+  });
+
+  // ─── Remembered polls (B4, B6) ───
+
+  it('lists polls newest touched first and forgets ids the server no longer has', async () => {
+    localStorage.clear();
+    localStorage.setItem('timesync_organizer_codes', JSON.stringify({ created: 'c', gone: 'g' }));
+    localStorage.setItem('timesync_responses', JSON.stringify({ answered: { participantId: 'x', editCode: 'e' } }));
+    localStorage.setItem('timesync_recent_polls', JSON.stringify({ answered: 100, created: 300, gone: 200 }));
+    const created = makePoll('created', 'Created here');
+    const answered = makePoll('answered', 'Answered here');
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      // The server answers in its own order and leaves out the deleted poll.
+      if (route(input) === '/api/polls') return Promise.resolve(jsonResponse([summary(answered), summary(created)]));
+      throw new Error(`Unexpected ${route(input)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(h(App));
+    await screen.findByText('Created here');
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/polls?ids=created,gone,answered');
+    expect([...document.querySelectorAll('[data-poll-id]')].map((row) => row.getAttribute('data-poll-id'))).toEqual([
+      'created',
+      'answered',
+    ]);
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).toEqual({ created: 'c' });
+    expect(Object.keys(JSON.parse(localStorage.getItem('timesync_recent_polls') ?? '{}'))).not.toContain('gone');
+  });
+
+  it('forgets a poll whose detail request returns 404', async () => {
+    localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'x', editCode: 'e' } }));
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = route(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(makePoll('p1', 'P1'))]));
+      if (url === '/api/polls/p1/access') return Promise.resolve(jsonResponse({ error: 'Poll not found' }, 404));
+      if (url === '/api/polls/p1') return Promise.resolve(jsonResponse({ error: 'Poll not found' }, 404));
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Poll error' });
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).not.toHaveProperty('p1');
+    expect(JSON.parse(localStorage.getItem('timesync_responses') ?? '{}')).toEqual({});
+  });
+
+  it('retries a retryable conflict when deleting a poll', async () => {
+    const poll = makePoll('p1', 'Contended');
+    let deleteAttempts = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = route(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse(deleteAttempts >= 2 ? [] : [summary(poll)]));
+      if (url === '/api/polls/p1/access') return Promise.resolve(jsonResponse({ organizer: true }));
+      if (url === '/api/polls/p1' && init?.method === 'DELETE') {
+        deleteAttempts += 1;
+        return Promise.resolve(
+          deleteAttempts === 1
+            ? jsonResponse({ error: 'Busy, try again', retryable: true }, 409)
+            : jsonResponse({ id: poll.id })
+        );
+      }
+      if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll));
+      throw new Error(`Unexpected ${init?.method ?? 'GET'} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Contended' });
+    fireEvent.click(screen.getByText('Manage poll'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete poll' }));
+    await screen.findByRole('heading', { name: 'Meetings' });
+    expect(deleteAttempts).toBe(2);
   });
 });

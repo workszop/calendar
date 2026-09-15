@@ -163,4 +163,19 @@ describe('HomePage', () => {
     expect(tile?.querySelector('strong')?.textContent).toBe('1');
     expect(tile?.querySelector('.sr-only')?.textContent).toContain('2026');
   });
+
+  it('renders meetings in the order it is given, without regrouping by kind', () => {
+    render(
+      h(HomePage, {
+        polls: [makeSummary('newest', 'Newest'), makeSummary('middle', 'Middle'), makeSummary('oldest', 'Oldest')],
+        onOpenPoll: vi.fn(),
+        onCreatePoll: vi.fn(),
+      })
+    );
+    expect([...document.querySelectorAll('[data-poll-id]')].map((row) => row.getAttribute('data-poll-id'))).toEqual([
+      'newest',
+      'middle',
+      'oldest',
+    ]);
+  });
 });

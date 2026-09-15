@@ -103,9 +103,11 @@ export const OrganizerCodePanel: React.FC<OrganizerCodePanelProps> = ({
 interface UnlockOrganizerFormProps {
   /** Resolves true when the code unlocks the poll. */
   onUnlock: (code: string) => Promise<boolean>;
+  /** Why the form is back, e.g. the stored code stopped working. */
+  notice?: string | null;
 }
 
-export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlock }) => {
+export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlock, notice }) => {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(false);
@@ -134,6 +136,11 @@ export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlo
       <label htmlFor="organizer-unlock-code">
         <KeyRound aria-hidden="true" /> Are you the organizer?
       </label>
+      {notice && (
+        <p role="status" className="d-organizer-code-hint d-organizer-unlock-notice" data-organizer-notice>
+          {notice}
+        </p>
+      )}
       <p className="d-organizer-code-hint">
         Enter the organizer code to lock a time, add dates, remove responses or delete this poll.
       </p>
