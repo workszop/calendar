@@ -94,6 +94,9 @@ export const Modal: React.FC<ModalProps> = ({
   // Escape closes; Tab / Shift+Tab stay inside the panel.
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.defaultPrevented) return;
+    // A nested dialog is portaled elsewhere in the DOM, but its key events
+    // still bubble here through React; leave those to the nested dialog.
+    if (!panelRef.current?.contains(e.target as Node)) return;
     if (e.key === 'Escape') {
       e.stopPropagation();
       onClose();
