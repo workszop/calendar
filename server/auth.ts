@@ -15,6 +15,14 @@ export function newCode(): string {
   return randomBytes(24).toString("base64url");
 }
 
+/** A client-generated edit code: 32-128 URL-safe characters. */
+export const CLIENT_CODE_RE = /^[A-Za-z0-9_-]{32,128}$/;
+
+/** Unguessable record id: prefix plus 16 random bytes as base64url (22 characters). */
+export function newId(prefix: "poll" | "part"): string {
+  return `${prefix}_${randomBytes(16).toString("base64url")}`;
+}
+
 export function hashCode(code: string): string {
   return createHash("sha256").update(code, "utf8").digest("hex");
 }
