@@ -154,14 +154,31 @@ describe('Netlify deployment contract', () => {
     expect(response.headers.get('cache-control')).toContain('no-store');
   });
 
-  it('rate-limits poll creation per Netlify client IP and declares a platform rate limit', async () => {
-    const { config } = await import(/* @vite-ignore */ FUNCTION_FILE);
-    expect(config.rateLimit).toEqual({ windowLimit: 300, windowSize: 60, aggregateBy: ['ip', 'domain'] });
+  it('reads rate limits from the environment', async () => {
+    vi.stubEnv('RATE_LIMIT_CREATE_PER_HOUR', '2');
+    vi.resetModules();
+    try {
+      const body = { title: 'Env limited', dates: [FUTURE_DATE] };
+      const from = () => invoke('POST', '/api/polls', body, { 'x-nf-client-connection-ip': '203.0.113.50' });
+      expect((await from()).status).toBe(201);
+      expect((await from()).status).toBe(201);
+      expect((await from()).status).toBe(429);
+    } finally {
+      vi.resetModules();
+    }
+  });
+
+  it('rate-limits poll creation per Netlify client IP and declares a roomy platform rate limit on /api', async () => {
+    const config = fs.readFileSync('netlify.toml', 'utf8');
+    const redirect = config.slice(config.indexOf('from = "/api/*"'));
+    expect(redirect).toMatch(/\[redirects\.rate_limit\][^[]*window_limit\s*=\s*1000[^[]*window_size\s*=\s*60[^[]*aggregate_by\s*=\s*\["ip",\s*"domain"\]/);
+    const { config: functionConfig } = await import(/* @vite-ignore */ FUNCTION_FILE);
+    expect(functionConfig?.rateLimit).toBeUndefined();
 
     const body = { title: 'Limited', dates: [FUTURE_DATE] };
     const from = (ip: string, spoof = '198.51.100.99') =>
       invoke('POST', '/api/polls', body, { 'x-nf-client-connection-ip': ip, 'X-Forwarded-For': spoof });
-    for (let i = 0; i < 10; i++) expect((await from('203.0.113.7', `198.51.100.${i}`)).status).toBe(201);
+    for (let i = 0; i < 60; i++) expect((await from('203.0.113.7', `198.51.100.${i}`)).status).toBe(201);
     const blocked = await from('203.0.113.7');
     expect(blocked.status).toBe(429);
     expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
@@ -183,10 +200,11 @@ describe('Netlify deployment contract', () => {
       { ...base, id: 'legacy_expired', title: 'Expired', dates: ['2020-01-01'] },
       { ...base, id: 'legacy_kept', title: 'Kept', dates: ['2099-10-01'] },
       { ...base, id: 'legacy_ownerless', title: 'No owner', dates: ['2099-10-01'], organizerCodeHash: undefined },
+      { id: 12345 },
     ]);
     await store.setJSON('poll/expired', { ...base, id: 'expired', title: 'Expired', dates: ['2020-01-01'] });
     await store.setJSON('poll/kept', { ...base, id: 'kept', title: 'Kept', dates: ['2099-10-01'] });
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const response = await cleanup(new Request('https://calendar.example/.netlify/functions/cleanup-polls', {
       method: 'POST', body: JSON.stringify({ next_run: '2099-01-01T00:00:00Z' }),
@@ -195,5 +213,6 @@ describe('Netlify deployment contract', () => {
     expect(await store.get('polls')).toBeNull();
     const { blobs } = await store.list({ prefix: 'poll/' });
     expect(blobs.map((blob) => blob.key).sort()).toEqual(['poll/kept', 'poll/legacy_kept']);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/removed 3 .*moved 1 .*skipped 1 malformed/));
   });
 });

@@ -14,6 +14,13 @@
   to = "/.netlify/functions/api/:splat"
   status = 200
   force = true
+  # Per IP across all API methods, before the function runs. Generous on purpose:
+  # a whole class behind one school NAT shares an IP, and reads must not starve.
+  # Writes have tighter per-IP limits inside the function.
+  [redirects.rate_limit]
+    window_limit = 1000
+    window_size = 60
+    aggregate_by = ["ip", "domain"]
 
 [[headers]]
   for = "/api/*"

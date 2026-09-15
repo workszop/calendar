@@ -4,7 +4,13 @@ import os from 'os';
 import path from 'path';
 import type { Server } from 'http';
 import { createApi } from '../server/api';
-import { createRateLimiter, DEFAULT_RATE_LIMITS } from '../server/rate-limit';
+import {
+  clientKey,
+  createRateLimiter,
+  DEFAULT_RATE_LIMITS,
+  rateLimitsFromEnv,
+  trustProxyFromEnv,
+} from '../server/rate-limit';
 import { MAX_AVAILABILITY_ENTRIES, MAX_POLL_BYTES } from '../src/utils/limits';
 
 // ─── Fixture: a real HTTP server backed by a throwaway data file ───
@@ -558,13 +564,30 @@ describe('poll API', () => {
     expect(fs.readFileSync(file, 'utf-8')).toBe(beforeBody);
   });
 
-  it('rejects a poll that would already be past retention', async () => {
-    // Clock is 2026-09-13: a last date of 2026-08-29 is 15 days back.
-    const expired = await api('POST', '/api/polls', { title: 'Too old', dates: ['2026-08-20', '2026-08-29'] });
-    expect(expired.status).toBe(400);
-    expect(expired.json.error).toMatch(/14 days/);
-    const lastDay = await api('POST', '/api/polls', { title: 'Just in time', dates: ['2026-08-30'] });
-    expect(lastDay.status).toBe(201);
+  it('rejects past dates on create, with one day of slack for time zones', async () => {
+    // Clock is 2026-09-13: 2026-09-12 is still allowed, 2026-09-11 is not.
+    const past = await api('POST', '/api/polls', { title: 'Too old', dates: ['2026-09-11', '2026-10-01'] });
+    expect(past.status).toBe(400);
+    expect(past.json).toEqual({ error: '2026-09-11 is in the past.' });
+    expect((await api('POST', '/api/polls', { title: 'Long gone', dates: ['2026-08-01'] })).json.error)
+      .toBe('2026-08-01 is in the past.');
+    expect((await api('POST', '/api/polls', { title: 'Yesterday', dates: ['2026-09-12'] })).status).toBe(201);
+  });
+
+  it('accepts a valid IANA time zone, rejects an unknown one and defaults an absent one', async () => {
+    const valid = await api('POST', '/api/polls', { title: 'Zoned', dates: ['2026-10-01'], timezone: 'Europe/Warsaw' });
+    expect(valid.status).toBe(201);
+    expect(valid.json.timezone).toBe('Europe/Warsaw');
+
+    for (const timezone of ['Mars/Olympus_Mons', 'not a zone', 'Europe/Warsaw; drop']) {
+      const invalid = await api('POST', '/api/polls', { title: 'Zoned', dates: ['2026-10-01'], timezone });
+      expect(invalid.status, timezone).toBe(400);
+      expect(invalid.json).toEqual({ error: 'timezone must be a valid IANA time zone, e.g. Europe/Warsaw.' });
+    }
+
+    const absent = await api('POST', '/api/polls', { title: 'Zoneless', dates: ['2026-10-01'] });
+    expect(absent.status).toBe(201);
+    expect(absent.json.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   });
 
   it('adds dates in the default window without changing the poll format or answers', async () => {
@@ -1061,7 +1084,8 @@ describe('poll API responses', () => {
     const file = path.join(tmpDir, 'polls.json');
     const polls = JSON.parse(fs.readFileSync(file, 'utf-8'));
     const stored = polls.find((p: { id: string }) => p.id === poll.id);
-    stored.description = 'x'.repeat(MAX_POLL_BYTES - 1000);
+    // Corrupt or hand-edited storage: normal use cannot get a poll this close to the limit.
+    stored.description = 'x'.repeat(MAX_POLL_BYTES - 200);
     fs.writeFileSync(file, JSON.stringify(polls, null, 2), 'utf-8');
 
     const res = await api('POST', `/api/polls/${poll.id}/respond`, {
@@ -1070,7 +1094,7 @@ describe('poll API responses', () => {
         [`2026-10-01T${String(9 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`, 'available'])),
     });
     expect(res.status).toBe(413);
-    expect(res.json.error).toMatch(/storage limit of 1 MB/);
+    expect(res.json.error).toMatch(/storage limit of 2 MB/);
     expect((await api('GET', `/api/polls/${poll.id}`)).json.participants).toHaveLength(0);
   });
 });
@@ -1202,16 +1226,124 @@ describe('poll API rate limits', () => {
     }
   });
 
-  it('applies the default limits: 10 polls an hour and 120 other writes per 10 minutes', async () => {
+  it('applies the default limits: 60 polls an hour and 600 other writes per 10 minutes', async () => {
     expect(DEFAULT_RATE_LIMITS).toEqual({
-      create: { limit: 10, windowMs: 3_600_000 },
-      write: { limit: 120, windowMs: 600_000 },
+      create: { limit: 60, windowMs: 3_600_000 },
+      write: { limit: 600, windowMs: 600_000 },
     });
     const { call, close } = await serve({});
     try {
       const body = { title: 'Default', dates: ['2026-10-01'] };
-      for (let i = 0; i < 10; i++) expect((await call('POST', '/api/polls', body)).status).toBe(201);
+      for (let i = 0; i < 60; i++) expect((await call('POST', '/api/polls', body)).status).toBe(201);
       expect((await call('POST', '/api/polls', body)).status).toBe(429);
+    } finally {
+      await close();
+    }
+  });
+
+  it('reads limits from the environment and ignores unusable values', async () => {
+    expect(rateLimitsFromEnv({})).toEqual({});
+    expect(rateLimitsFromEnv({ RATE_LIMIT_CREATE_PER_HOUR: '5', RATE_LIMIT_WRITES_PER_10_MIN: '0' })).toEqual({
+      create: { limit: 5, windowMs: 3_600_000 },
+      write: false,
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(rateLimitsFromEnv({ RATE_LIMIT_CREATE_PER_HOUR: 'lots', RATE_LIMIT_WRITES_PER_10_MIN: '-1' })).toEqual({});
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+
+    const { call, close } = await serve({ rateLimit: rateLimitsFromEnv({ RATE_LIMIT_CREATE_PER_HOUR: '1' }) });
+    try {
+      const body = { title: 'From env', dates: ['2026-10-01'] };
+      expect((await call('POST', '/api/polls', body)).status).toBe(201);
+      expect((await call('POST', '/api/polls', body)).status).toBe(429);
+    } finally {
+      await close();
+    }
+  });
+
+  it('parses TRUST_PROXY for Express, off by default', () => {
+    expect(trustProxyFromEnv(undefined)).toBe(false);
+    expect(trustProxyFromEnv('')).toBe(false);
+    expect(trustProxyFromEnv('false')).toBe(false);
+    expect(trustProxyFromEnv('true')).toBe(true);
+    expect(trustProxyFromEnv('1')).toBe(1);
+    expect(trustProxyFromEnv('2')).toBe(2);
+    expect(trustProxyFromEnv('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8');
+  });
+
+  it('keys clients by X-Forwarded-For only when trust proxy is set', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-proxy-'));
+    const app = createApi(path.join(dir, 'polls.json'), {
+      clock: () => new Date('2026-09-13T12:00:00Z'),
+      rateLimit: { create: { limit: 1, windowMs: 60_000 } },
+    });
+    app.set('trust proxy', trustProxyFromEnv('loopback'));
+    const local = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const addr = local.address();
+    const root = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
+    const create = (forwardedFor: string) => fetch(`${root}/api/polls`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': forwardedFor },
+      body: JSON.stringify({ title: 'Proxied', dates: ['2026-10-01'] }),
+    });
+    try {
+      expect((await create('203.0.113.1')).status).toBe(201);
+      expect((await create('203.0.113.2')).status).toBe(201);
+      expect((await create('203.0.113.1')).status).toBe(429);
+    } finally {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('groups IPv6 clients by their /64 network', async () => {
+    expect(clientKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe(clientKey('2001:0db8:0001:0002::1'));
+    expect(clientKey('2001:db8:1:2::1')).not.toBe(clientKey('2001:db8:1:3::1'));
+    expect(clientKey('::ffff:203.0.113.9')).toBe('203.0.113.9');
+    expect(clientKey('fe80::1%eth0')).toBe(clientKey('fe80::2'));
+    expect(clientKey('203.0.113.9')).toBe('203.0.113.9');
+
+    const limiter = createRateLimiter({ create: { limit: 1, windowMs: 60_000 } });
+    const { call, close } = await serve({ rateLimit: limiter, clientIp: (req) => String(req.headers['x-test-client']) });
+    try {
+      const body = { title: 'IPv6', dates: ['2026-10-01'] };
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': '2001:db8:1:2::10' })).status).toBe(201);
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': '2001:db8:1:2::11' })).status).toBe(429);
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': '2001:db8:1:3::10' })).status).toBe(201);
+    } finally {
+      await close();
+    }
+  });
+
+  it('tracks a bounded number of clients and evicts the oldest first', async () => {
+    let now = 0;
+    const limiter = createRateLimiter({ create: { limit: 1, windowMs: 60_000 } }, () => now, { maxClients: 3 });
+    const { call, close } = await serve({ rateLimit: limiter, clientIp: (req) => String(req.headers['x-test-client']) });
+    try {
+      const body = { title: 'Crowd', dates: ['2026-10-01'] };
+      const from = (client: string) => call('POST', '/api/polls', body, { 'X-Test-Client': client });
+      for (const client of ['a', 'b', 'c']) {
+        now += 1;
+        expect((await from(client)).status).toBe(201);
+      }
+      expect((await from('a')).status).toBe(429);
+      expect(limiter.trackedClients('create')).toBe(3);
+      now += 1;
+      expect((await from('d')).status).toBe(201);
+      expect(limiter.trackedClients('create')).toBe(3);
+      // "a" was the oldest window and got evicted; "c" is still counted.
+      expect((await from('a')).status).toBe(201);
+      expect((await from('c')).status).toBe(429);
+      // Expired windows are dropped as time passes, without a full scan.
+      now += 120_000;
+      expect((await from('e')).status).toBe(201);
+      expect(limiter.trackedClients('create')).toBe(1);
     } finally {
       await close();
     }

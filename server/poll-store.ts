@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { Poll } from "../src/types";
 import { MAX_POLL_BYTES, POLL_ID_RE } from "../src/utils/limits";
+import { decodePoll, encodePoll } from "./poll-codec";
 
 // ─── Store contract ───
 // Every poll is its own record. Callers never see or rewrite other polls, so a
@@ -33,10 +34,19 @@ export interface PollStore {
   listIds(): Promise<string[]>;
   /**
    * Moves polls from a pre-per-poll storage layout into per-poll records, keeping
-   * only those `keep` accepts, then deletes the old layout. Only stores that ever
-   * had another layout implement it.
+   * only those `keep` accepts, then deletes the old layout. Malformed old records
+   * are skipped and counted. Only stores that ever had another layout implement it.
    */
-  importLegacyPolls?(keep: (poll: Poll) => boolean): Promise<{ imported: number; dropped: number }>;
+  importLegacyPolls?(keep: (poll: Poll) => boolean): Promise<LegacyImportResult>;
+}
+
+export interface LegacyImportResult {
+  /** Polls now in their own record (written by this import). */
+  imported: number;
+  /** Polls `keep` rejected, or with an unusable id. */
+  dropped: number;
+  /** Old records that are not readable polls. */
+  skipped: number;
 }
 
 // ─── Store errors ───
@@ -69,9 +79,9 @@ export class PollTooLargeError extends Error {
 
 // ─── Shared checks ───
 
-/** Compact JSON size of a poll in bytes. */
+/** Size of a poll in bytes as it is stored: compact JSON in the storage format. */
 export function pollBytes(poll: Poll): number {
-  return Buffer.byteLength(JSON.stringify(poll), "utf8");
+  return Buffer.byteLength(JSON.stringify(encodePoll(poll)), "utf8");
 }
 
 /** Throws PollTooLargeError when the poll may not be stored. */
@@ -79,25 +89,28 @@ export function assertPollSize(poll: Poll): void {
   if (pollBytes(poll) > MAX_POLL_BYTES) throw new PollTooLargeError();
 }
 
+/** Whether two polls store as the same record. */
+export function samePoll(a: Poll, b: Poll): boolean {
+  return JSON.stringify(encodePoll(a)) === JSON.stringify(encodePoll(b));
+}
+
 /** Ids outside the public id format can never name a stored poll. */
 export function isStorableId(id: string): boolean {
   return POLL_ID_RE.test(id);
 }
 
-/** A stored record must at least look like a poll; anything else is corruption. */
+/** A stored record, in either storage format, as a poll. Anything else is corruption and throws. */
 export function asStoredPoll(data: unknown): Poll {
-  if (!data || typeof data !== "object" || Array.isArray(data) || typeof (data as Poll).id !== "string") {
-    throw new Error("Poll store returned a record that is not a poll.");
-  }
-  return data as Poll;
+  return decodePoll(data);
 }
 
 // ─── File store (local server) ───
 
 /**
  * One JSON array file behind the per-poll interface. Writes go through one
- * in-process queue, so concurrent requests never lose updates. The file format
- * is unchanged from earlier versions, so existing data files keep working.
+ * in-process queue, so concurrent requests never lose updates. The file stays
+ * one array of polls; availability is written compactly (see poll-codec) and
+ * older verbose files keep working.
  */
 export function createFilePollStore(dataFile: string): PollStore {
   let cache: Poll[] | null = null;
@@ -136,7 +149,7 @@ export function createFilePollStore(dataFile: string): PollStore {
   function savePolls(polls: Poll[]) {
     ensureDataFile();
     const tempFile = `${dataFile}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(polls, null, 2), "utf-8");
+    fs.writeFileSync(tempFile, JSON.stringify(polls.map(encodePoll), null, 2), "utf-8");
     fs.renameSync(tempFile, dataFile);
     // Publish the new state only once it is durable on disk.
     cache = polls;
@@ -170,7 +183,7 @@ export function createFilePollStore(dataFile: string): PollStore {
       if (!isStorableId(poll.id)) throw new Error("Poll id is not storable.");
       const polls = readPolls();
       const existing = polls.find((candidate) => candidate.id === poll.id);
-      if (existing) return JSON.stringify(existing) === JSON.stringify(poll);
+      if (existing) return samePoll(existing, poll);
       assertPollSize(poll);
       savePolls([structuredClone(poll), ...polls]);
       return true;
