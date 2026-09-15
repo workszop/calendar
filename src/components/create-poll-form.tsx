@@ -73,7 +73,7 @@ export function validateCreatePollTitle(title: string): Pick<CreatePollFormError
 
 /**
  * Validate the complete creation draft and return the same future dates that
- * should be sent to the API. Both the compatibility modal and the page use
+ * should be sent to the API. The create page uses
  * this function so empty-day and hour-window semantics cannot drift. With a
  * duration, every date must also hold a back-to-back run as long as the
  * meeting (the server rejects the poll otherwise).
@@ -137,7 +137,7 @@ export function buildCreatePollPayload(
   };
 }
 
-/** Remember the organizer identity exactly as the old modal did. */
+/** Remember the organizer identity for the next poll. */
 export function rememberCreatePollOrganizer(values: Pick<CreatePollFormValues, 'creatorName' | 'creatorEmail'>) {
   setStoredUser({
     name: values.creatorName.trim() || undefined,
@@ -146,7 +146,7 @@ export function rememberCreatePollOrganizer(values: Pick<CreatePollFormValues, '
 }
 
 // ─── Hook ───
-/** Shared controlled form state for the compatibility modal and create page. */
+/** Controlled form state for the create page. */
 export function useCreatePollForm(initialLocation = '', initiallyEmpty = false): CreatePollFormController {
   const storedUser = getStoredUser();
   const [title, setTitle] = useState('');

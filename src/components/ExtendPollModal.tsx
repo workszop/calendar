@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
-import { getMeetingWindow, isValidHourWindow } from '../utils/consensus';
+import { findDateWithoutMeetingFit, isValidHourWindow } from '../utils/consensus';
 import { latestPollDate, MAX_POLL_DATES } from '../utils/limits';
 import { useProposalDraft } from '../hooks/useProposalDraft';
 import { Modal } from './Modal';
@@ -32,20 +32,6 @@ function initialRange(poll: Poll): [number, number] {
   return isValidHourWindow(poll.startHour, poll.endHour)
     ? [poll.startHour, poll.endHour]
     : [FALLBACK_START_HOUR, FALLBACK_END_HOUR];
-}
-
-// TODO(merge): replace with consensus findDateWithoutMeetingFit
-/** First new date whose proposed slots hold no back-to-back run of the meeting length. */
-export function findDateWithoutMeetingFitLocal(
-  poll: Poll,
-  dates: string[],
-  proposedSlots: Record<string, string[]>
-): string | undefined {
-  // Judge each date as the server will store it: exact slots, no hour overrides.
-  const candidate: Poll = { ...poll, dates, proposedSlots, dayHours: undefined };
-  return dates.find(
-    (date) => !(proposedSlots[date] ?? []).some((time) => getMeetingWindow(candidate, date, time))
-  );
 }
 
 // ─── Component ───
@@ -93,7 +79,10 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
       nextErrors.hours = 'Start hour must be earlier than end hour.';
     } else {
       const emptyDay = draft.findEmptyDay(dates);
-      const unfitDay = emptyDay ? undefined : findDateWithoutMeetingFitLocal(poll, dates, proposedSlots);
+      // Judge the new days as the server stores them: exact slots, no hour overrides.
+      const unfitDay = emptyDay
+        ? undefined
+        : findDateWithoutMeetingFit({ ...poll, proposedSlots, dayHours: undefined }, dates);
       if (emptyDay) nextErrors.hours = `${formatDateHeading(emptyDay).full}: propose at least one time.`;
       else if (unfitDay) {
         nextErrors.hours = `${formatDateHeading(unfitDay).full}: propose at least ${poll.durationMinutes} minutes of back-to-back times.`;

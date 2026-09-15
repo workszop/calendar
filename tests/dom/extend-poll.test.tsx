@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement as h } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { ExtendPollModal, findDateWithoutMeetingFitLocal } from '../../src/components/ExtendPollModal';
+import { ExtendPollModal } from '../../src/components/ExtendPollModal';
 import { formatDateHeading, toDateStr } from '../../src/utils/calendar';
 import type { Poll } from '../../src/types';
 
@@ -201,30 +201,5 @@ describe('ExtendPollModal', () => {
     firstDestination.focus();
     fireEvent.keyDown(firstDestination, { key: 'Tab' });
     expect(copyDialog.contains(document.activeElement)).toBe(true);
-  });
-});
-
-describe('findDateWithoutMeetingFitLocal', () => {
-  const poll = makePoll({ durationMinutes: 60, dates: ['2026-10-01'] });
-
-  it('accepts a date with a long enough run, even beside gaps', () => {
-    expect(
-      findDateWithoutMeetingFitLocal(poll, ['2026-10-05'], { '2026-10-05': ['05:00', '08:00', '08:30'] })
-    ).toBeUndefined();
-  });
-
-  it('returns the first date whose runs are all too short', () => {
-    expect(
-      findDateWithoutMeetingFitLocal(poll, ['2026-10-05', '2026-10-06', '2026-10-07'], {
-        '2026-10-05': ['09:00', '09:30'],
-        '2026-10-06': ['09:00', '10:00', '11:00'],
-        '2026-10-07': [],
-      })
-    ).toBe('2026-10-06');
-  });
-
-  it('ignores the poll-wide hours and day overrides of existing dates', () => {
-    const narrow = makePoll({ durationMinutes: 30, startHour: 10, endHour: 11, dayHours: { '2026-10-05': { startHour: 10, endHour: 11 } } });
-    expect(findDateWithoutMeetingFitLocal(narrow, ['2026-10-05'], { '2026-10-05': ['00:00'] })).toBeUndefined();
   });
 });
