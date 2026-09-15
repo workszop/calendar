@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { Poll } from "../src/types";
 import { MAX_POLL_BYTES, POLL_ID_RE } from "../src/utils/limits";
-import { decodePoll, encodePoll } from "./poll-codec";
+import { decodePoll, encodePoll } from "../src/utils/pollCodec";
 
 // ─── Store contract ───
 // Every poll is its own record. Callers never see or rewrite other polls, so a
@@ -109,7 +109,7 @@ export function asStoredPoll(data: unknown): Poll {
 /**
  * One JSON array file behind the per-poll interface. Writes go through one
  * in-process queue, so concurrent requests never lose updates. The file stays
- * one array of polls; availability is written compactly (see poll-codec) and
+ * one array of polls; availability is written compactly (see src/utils/pollCodec) and
  * older verbose files keep working.
  */
 export function createFilePollStore(dataFile: string): PollStore {

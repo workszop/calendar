@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import App, { apiRetry } from '../../src/App';
 import { ConsensusPanel } from '../../src/components/ConsensusPanel';
 import { toDateStr } from '../../src/utils/calendar';
+import { encodePoll } from '../../src/utils/pollCodec';
 import type { Poll, PollSummary } from '../../src/types';
 
 // Confetti needs a real canvas, which jsdom lacks.
@@ -172,6 +173,30 @@ describe('organizer access', () => {
     // The link code was checked once before it was kept, and not re-checked.
     expect(calls.filter((call) => call.url === '/api/polls/p1/access')).toHaveLength(1);
     expect(document.querySelector('[data-organizer-state]')?.getAttribute('data-organizer-state')).toBe('organizer');
+  });
+
+  it('asks for compact availability and loads a returning participant from it', async () => {
+    const poll = makePoll({
+      participants: [
+        { id: 'part_me', name: 'Me', timezone: 'UTC', updatedAt: '', availability: { '2026-10-01T09:30': 'if_needed' } },
+      ],
+    });
+    localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'part_me', editCode: 'e'.repeat(43) } }));
+    const calls = mockFetch(({ url, headers }) => {
+      if (url === '/api/polls/p1') {
+        return jsonResponse(headers['x-availability-format'] === 'compact' ? encodePoll(poll) : poll);
+      }
+      if (url.startsWith('/api/polls?ids=')) return jsonResponse([]);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    expect(calls.find((call) => call.url === '/api/polls/p1')?.headers['x-availability-format']).toBe('compact');
+    await waitFor(() =>
+      expect(document.querySelector('[data-answer-grid] [data-slot-key="2026-10-01T09:30"]')?.getAttribute('data-status')).toBe('if_needed')
+    );
   });
 
   it('hides Re-open voting from visitors of a locked poll', async () => {

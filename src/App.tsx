@@ -40,6 +40,7 @@ import {
 import type { GridInterval } from './utils/grid';
 import { TOAST_MS } from './utils/constants';
 import { POLL_ID_RE } from './utils/limits';
+import { decodePoll } from './utils/pollCodec';
 import { toPollSummary } from './utils/pollSummary';
 
 // ─── Constants ───
@@ -98,6 +99,17 @@ async function readError(res: Response, fallback: string): Promise<ApiError> {
 
 // ─── API requests ───
 
+/** Asks the API for compact availability, which keeps large polls small on the wire. */
+const COMPACT_AVAILABILITY = { 'X-Availability-Format': 'compact' };
+
+/** Reads a poll (or `{ poll }`-shaped) response in either availability format. */
+async function readPollBody<T>(res: Response): Promise<T> {
+  const body = (await res.json()) as { poll?: unknown; participants?: unknown } | null;
+  if (body && Array.isArray(body.participants)) return decodePoll(body) as T;
+  if (body && body.poll && typeof body.poll === 'object') return { ...body, poll: decodePoll(body.poll) } as T;
+  return body as T;
+}
+
 /** Retry timing for storage conflicts. Tests set baseDelayMs to 0. */
 export const apiRetry = { attempts: 3, baseDelayMs: 150 };
 const RATE_LIMIT_MESSAGE = 'Too many requests. Please wait a moment and try again.';
@@ -119,8 +131,9 @@ async function isRetryableConflict(res: Response): Promise<boolean> {
  * conflict) is sent again, up to apiRetry.attempts in total, with jittered backoff.
  */
 export async function fetchWithRetry(input: string, init?: RequestInit): Promise<Response> {
+  const withFormat = { ...init, headers: { ...COMPACT_AVAILABILITY, ...(init?.headers as Record<string, string>) } };
   for (let attempt = 1; ; attempt += 1) {
-    const res = await fetch(input, init);
+    const res = await fetch(input, withFormat);
     if (attempt >= apiRetry.attempts || !(await isRetryableConflict(res))) return res;
     const delay = apiRetry.baseDelayMs * attempt * (0.5 + Math.random());
     await new Promise((resolve) => setTimeout(resolve, delay));
@@ -411,7 +424,10 @@ export default function App() {
           : linkVerified
             ? Promise.resolve({ organizer: true })
             : checkOrganizerCode(pollId, storedCode, controller.signal);
-        const res = await fetch(pollPath(pollId), { signal: controller.signal, headers: organizerHeaders(pollId) });
+        const res = await fetch(pollPath(pollId), {
+          signal: controller.signal,
+          headers: { ...COMPACT_AVAILABILITY, ...organizerHeaders(pollId) },
+        });
         if (!res.ok) {
           if (res.status === 404) {
             forgetPoll(pollId);
@@ -422,7 +438,7 @@ export default function App() {
           // 429 and 5xx are temporary: never "not found", never a reason to forget.
           throw await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to load poll');
         }
-        const data: unknown = await res.json();
+        const data: unknown = await readPollBody(res).catch(() => null);
         if (!isPollShape(data) || data.id !== pollId) throw new Error('Poll not found');
         if (requestId !== navigationRequestRef.current) return;
         commitActivePoll(data);
@@ -638,7 +654,7 @@ export default function App() {
       if (res.status >= 400 && res.status < 500) throw new SaveAvailabilityError('other', failure.message);
       throw failure;
     }
-    const { poll: updatedPoll, participant, editCode: issuedCode } = (await res.json()) as {
+    const { poll: updatedPoll, participant, editCode: issuedCode } = (await readPollBody(res)) as {
       poll: Poll;
       participant?: { id: string };
       editCode?: string;
@@ -673,7 +689,7 @@ export default function App() {
         headers: organizerHeaders(pollId),
       });
       if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to remove participant');
-      const updated: Poll = await res.json();
+      const updated = await readPollBody<Poll>(res);
       void fetchPollsList();
       if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
       commitActivePoll(updated);
@@ -713,7 +729,7 @@ export default function App() {
       body: JSON.stringify({ dates, proposedSlots }),
     });
     if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to add dates');
-    const updated: Poll = await res.json();
+    const updated = await readPollBody<Poll>(res);
     void fetchPollsList();
     if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
     commitActivePoll(updated);
@@ -740,7 +756,7 @@ export default function App() {
         }),
       });
       if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to lock meeting time');
-      const updated: Poll = await res.json();
+      const updated = await readPollBody<Poll>(res);
       void fetchPollsList();
       if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
       commitActivePoll(updated);
@@ -761,7 +777,7 @@ export default function App() {
     try {
       const res = await fetchWithRetry(pollPath(pollId, '/reset'), { method: 'POST', headers: organizerHeaders(pollId) });
       if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to reset finalized time');
-      const updated: Poll = await res.json();
+      const updated = await readPollBody<Poll>(res);
       void fetchPollsList();
       if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
       commitActivePoll(updated);
@@ -783,7 +799,7 @@ export default function App() {
         body: JSON.stringify(pollData),
       });
       if (!res.ok) throw await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to create poll');
-      const { organizerCode, ...newPoll } = (await res.json()) as Poll & { organizerCode?: string };
+      const { organizerCode, ...newPoll } = await readPollBody<Poll & { organizerCode?: string }>(res);
       // Stored before anything else, so a later navigation can never lose it.
       if (organizerCode) {
         setOrganizerCode(newPoll.id, organizerCode);
@@ -872,9 +888,9 @@ export default function App() {
     setOrganizerNotice(null);
     showToast('Organizer tools unlocked');
     // Reload so organizer-only details (such as emails) arrive.
-    const detail = await fetch(pollPath(pollId), { headers: organizerHeaders(pollId) });
+    const detail = await fetch(pollPath(pollId), { headers: { ...COMPACT_AVAILABILITY, ...organizerHeaders(pollId) } });
     if (detail.ok) {
-      const data: unknown = await detail.json();
+      const data: unknown = await readPollBody(detail).catch(() => null);
       if (isPollShape(data) && data.id === pollId && activePollIdRef.current === pollId) commitActivePoll(data);
     }
     void fetchPollsList();

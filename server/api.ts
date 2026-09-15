@@ -10,6 +10,7 @@ import {
   isValidHourWindow,
   timeToMinutes,
 } from "../src/utils/consensus";
+import { encodePoll } from "../src/utils/pollCodec";
 import { toPollSummary } from "../src/utils/pollSummary";
 import {
   earliestPollDate,
@@ -227,6 +228,18 @@ export function toPublicPoll(poll: Poll, isOrganizer: boolean): Poll {
   };
 }
 
+/** Header a client sends to receive availability in the compact storage form. */
+const FORMAT_HEADER = "x-availability-format";
+
+/**
+ * The public poll in the format the client asked for. Compact availability keeps
+ * even a fully answered maximum-size poll far below the function response limit.
+ */
+function pollForClient(req: express.Request, poll: Poll, isOrganizer: boolean): unknown {
+  const publicPoll = toPublicPoll(poll, isOrganizer);
+  return req.headers[FORMAT_HEADER] === "compact" ? encodePoll(publicPoll) : publicPoll;
+}
+
 const ORGANIZER_ONLY = "Only the organizer can do this. Enter the organizer code to unlock it.";
 const VOTING_CLOSED = "Voting is closed. The organizer must re-open voting before answers can change.";
 /** Fresh ids to try if a generated poll id is somehow already taken. */
@@ -326,7 +339,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       res.status(404).json({ error: "Poll not found" });
       return;
     }
-    res.json(toPublicPoll(poll, codeMatches(readCodeHeader(req, ORGANIZER_HEADER), poll.organizerCodeHash)));
+    res.json(pollForClient(req, poll, codeMatches(readCodeHeader(req, ORGANIZER_HEADER), poll.organizerCodeHash)));
   }));
 
   // Whether the presented organizer code unlocks this poll.
@@ -496,7 +509,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         stored = await pollStore.create(newPoll);
       }
       if (!stored) throw new PollStoreConflictError();
-      res.status(201).json({ ...toPublicPoll(newPoll, true), organizerCode });
+      res.status(201).json({ ...(pollForClient(req, newPoll, true) as object), organizerCode });
     })
   );
 
@@ -586,7 +599,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(404).json({ error: "Poll not found" });
         return;
       }
-      res.json(toPublicPoll(poll, true));
+      res.json(pollForClient(req, poll, true));
     })
   );
 
@@ -749,7 +762,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       }
       const publicPoll = toPublicPoll(outcome.poll, isOrganizer);
       res.json({
-        poll: publicPoll,
+        poll: pollForClient(req, outcome.poll, isOrganizer),
         participant: publicPoll.participants.find((p) => p.id === outcome.participant.id),
         // The code in use for a first save, including a replayed one.
         ...(firstSaveCode ? { editCode: firstSaveCode } : {}),
@@ -792,7 +805,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           .json({ error: unknownParticipant ? "Participant not found" : "Poll not found" });
         return;
       }
-      res.json(toPublicPoll(poll, true));
+      res.json(pollForClient(req, poll, true));
     })
   );
 
@@ -875,7 +888,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(404).json({ error: "Poll not found" });
         return;
       }
-      res.json(toPublicPoll(poll, true));
+      res.json(pollForClient(req, poll, true));
     })
   );
 
@@ -902,7 +915,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(404).json({ error: "Poll not found" });
         return;
       }
-      res.json(toPublicPoll(poll, true));
+      res.json(pollForClient(req, poll, true));
     })
   );
 

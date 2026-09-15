@@ -967,6 +967,23 @@ describe('poll API authorization', () => {
 
 // ─── Responses: idempotent first saves, stored fields, locked voting ───
 describe('poll API responses', () => {
+  it('sends compact availability only to clients that ask for it', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Wire', dates: ['2026-10-01'] })).json;
+    const saved = await api('POST', `/api/polls/${poll.id}/respond`, {
+      name: 'Wes', availability: { '2026-10-01T09:30': 'preferred' },
+    });
+    expect(saved.json.poll.participants[0].availability).toEqual({ '2026-10-01T09:30': 'preferred' });
+
+    const compact = await api('GET', `/api/polls/${poll.id}`, undefined, {
+      guest: true, headers: { 'X-Availability-Format': 'compact' },
+    });
+    expect(compact.json.participants[0].availability).toBeUndefined();
+    expect(compact.json.participants[0].slots).toEqual({ '2026-10-01': '......................................p' });
+    expect(compact.json.participants[0].editCodeHash).toBeUndefined();
+    const { decodePoll } = await import('../src/utils/pollCodec');
+    expect(decodePoll(compact.json)).toEqual((await api('GET', `/api/polls/${poll.id}`, undefined, { guest: true })).json);
+  });
+
   const clientCode = (seed: string) => seed.repeat(40).slice(0, 40);
 
   it('uses unguessable base64url ids for polls and participants', async () => {

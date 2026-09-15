@@ -1,5 +1,5 @@
 import type { Poll } from "../src/types";
-import { encodePoll } from "./poll-codec";
+import { encodePoll } from "../src/utils/pollCodec";
 import {
   asStoredPoll,
   assertPollSize,

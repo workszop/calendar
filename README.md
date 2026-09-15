@@ -165,8 +165,11 @@ Input limits live in `src/utils/limits.ts` and are enforced by the API: at most
 60 dates per poll, 200 responses, one year ahead, 5760 availability entries per
 response (60 dates of 15-minute slots), a 256 kB request body, and 2 MB per
 stored poll. Storage packs each response's availability into one character per
-15-minute slot per date (the API still sends and accepts the usual
-`"YYYY-MM-DDTHH:mm": status` map, and older verbose records are still read). The
+15-minute slot per date (older verbose records are still read). The API accepts
+the usual `"YYYY-MM-DDTHH:mm": status` map and sends it by default; a client that
+sends `X-Availability-Format: compact` receives the packed `slots` form instead.
+The app always asks for it, which keeps the largest poll's response under
+Netlify's 6 MB function response limit (the verbose form would be about 34 MB). The
 largest valid poll - 60 full days, 200 responses answering every slot, every text
 field at its limit - stores in about 1.8 MB, so normal use never reaches the cap;
 the `413` it produces only guards against corrupt or abusive records, and nothing

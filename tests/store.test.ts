@@ -563,3 +563,21 @@ describe("blob poll store", () => {
   });
 
 });
+
+// ─── Response size ───
+describe("poll responses on the wire", () => {
+  // Netlify synchronous functions return at most 6 MB.
+  const RESPONSE_LIMIT_BYTES = 6 * 1024 * 1024;
+
+  it("keeps a worst-case poll below the function response limit in compact form", async () => {
+    const { toPublicPoll } = await import("../server/api");
+    const { decodePoll, encodePoll } = await import("../src/utils/pollCodec");
+    const publicPoll = toPublicPoll(worstCasePoll("poll_wire"), true);
+
+    const verbose = Buffer.byteLength(JSON.stringify(publicPoll));
+    const compact = Buffer.byteLength(JSON.stringify(encodePoll(publicPoll)));
+    expect(verbose).toBeGreaterThan(RESPONSE_LIMIT_BYTES);
+    expect(compact).toBeLessThan(RESPONSE_LIMIT_BYTES);
+    expect(decodePoll(JSON.parse(JSON.stringify(encodePoll(publicPoll))))).toEqual(publicPoll);
+  });
+});
