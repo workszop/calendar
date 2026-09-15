@@ -35,6 +35,7 @@ import { OrganizerCodePanel, takeOrganizerCodeFromUrl, UnlockOrganizerForm } fro
 import type { GridInterval } from './utils/grid';
 import { TOAST_MS } from './utils/constants';
 import { POLL_ID_RE } from './utils/limits';
+import { toPollSummary } from './utils/pollSummary';
 
 // ─── Constants ───
 
@@ -151,26 +152,6 @@ function isPollShape(value: unknown): value is Poll {
     Array.isArray(poll.participants)
   );
 }
-/**
- * List-row shape of a full poll, for confirm dialogs before the home list has
- * loaded. Mirrors the server's toSummary; only App needs it, so it stays here.
- */
-function summaryFromPoll(source: Poll): PollSummary {
-  return {
-    id: source.id,
-    title: source.title,
-    description: source.description,
-    location: source.location,
-    durationMinutes: source.durationMinutes,
-    timezone: source.timezone,
-    dates: source.dates,
-    creatorName: source.creatorName,
-    createdAt: source.createdAt,
-    finalizedSlot: source.finalizedSlot,
-    participantsCount: source.participants.length,
-  };
-}
-
 // ─── Component ───
 
 export default function App() {
@@ -770,7 +751,7 @@ export default function App() {
   const handleDeleteCurrentPoll = useCallback(() => {
     if (!activePoll) return;
     setPendingPollDelete(
-      pollsList.find((item) => item.id === activePoll.id) ?? summaryFromPoll(activePoll)
+      pollsList.find((item) => item.id === activePoll.id) ?? toPollSummary(activePoll)
     );
   }, [activePoll, pollsList]);
 

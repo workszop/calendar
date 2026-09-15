@@ -1,13 +1,16 @@
 import express from "express";
-import type { DayHours, Poll, ParticipantResponse, PollSummary, SlotStatus } from "../src/types";
+import type { DayHours, Poll, ParticipantResponse, SlotStatus } from "../src/types";
 import {
   generateDaySlots,
   generateTimeSlots,
   getDayHours,
   getMeetingWindow,
   isHalfHourValue,
+  findDateWithoutMeetingFit,
   isValidHourWindow,
+  timeToMinutes,
 } from "../src/utils/consensus";
+import { toPollSummary } from "../src/utils/pollSummary";
 import {
   latestPollDate,
   MAX_AVAILABILITY_ENTRIES,
@@ -55,15 +58,6 @@ function isCalendarDate(value: unknown): value is string {
   if (typeof value !== "string" || !DATE_RE.test(value) || value.startsWith("0000")) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
-
-/**
- * Minutes since midnight, so "24:00" sorts after "23:30" (string compare would too, but this is explicit).
- * consensus.ts keeps its own copy private; this one serves request validation.
- */
-function timeToMinutes(time: string): number {
-  const [h, m] = time.split(":").map(Number);
-  return h * 60 + m;
 }
 
 /** Absent (undefined/null) or a string. Anything else is a client mistake. */
@@ -222,30 +216,6 @@ export function toPublicPoll(poll: Poll, isOrganizer: boolean): Poll {
   };
 }
 
-/** The one server-side mapping from a stored poll to its list-view summary. */
-export function toSummary(poll: Poll): PollSummary {
-  return {
-    id: poll.id,
-    title: poll.title,
-    description: poll.description,
-    location: poll.location,
-    durationMinutes: poll.durationMinutes,
-    timezone: poll.timezone,
-    dates: poll.dates,
-    creatorName: poll.creatorName,
-    createdAt: poll.createdAt,
-    finalizedSlot: poll.finalizedSlot,
-    participantsCount: poll.participants.length,
-  };
-}
-
-/** First date without a back-to-back run of proposed slots long enough for the meeting. */
-function firstDateWithoutFit(poll: Poll, dates: string[]): string | undefined {
-  return dates.find(
-    (date) => !generateDaySlots(poll, date).some((time) => getMeetingWindow(poll, date, time) !== null)
-  );
-}
-
 const ORGANIZER_ONLY = "Only the organizer can do this. Enter the organizer code to unlock it.";
 const VOTING_CLOSED = "Voting is closed. The organizer must re-open voting before answers can change.";
 /** Fresh ids to try if a generated poll id is somehow already taken. */
@@ -335,7 +305,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       res.json([]);
       return;
     }
-    res.json((await pollStore.getMany(ids)).map(toSummary));
+    res.json((await pollStore.getMany(ids)).map(toPollSummary));
   }));
 
   // Get single poll
@@ -498,7 +468,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
 
-      const unfit = firstDateWithoutFit(newPoll, dates);
+      const unfit = findDateWithoutMeetingFit(newPoll, dates);
       if (unfit) {
         res.status(400).json({ error: `${unfit} has no ${newPoll.durationMinutes}-minute run of proposed times.` });
         return;
@@ -586,7 +556,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           Object.assign(found, proposalSpan(found.proposedSlots, found.slotInterval));
         }
         found.dates = [...found.dates, ...newDates].sort();
-        const unfit = firstDateWithoutFit(found, newDates);
+        const unfit = findDateWithoutMeetingFit(found, newDates);
         if (unfit) return reject(400, `${unfit} has no ${found.durationMinutes}-minute run of proposed times.`);
         return found;
       });
