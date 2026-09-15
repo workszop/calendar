@@ -1,5 +1,5 @@
 import type { Poll, SlotStatus } from '../types';
-import { analyzeSlot, slotKey } from './consensus';
+import { analyzeWindow, slotKey } from './consensus';
 
 export type GridInterval = 30 | 60;
 
@@ -19,14 +19,5 @@ export function getBlockStatus(availability: Record<string, SlotStatus>, block: 
 
 /** A participant counts as available only when they can attend the entire block. */
 export function analyzeGridBlock(poll: Poll, block: GridBlock) {
-  const key = slotKey(block.date, block.startTime);
-  const participants = poll.participants.map((participant) => {
-    const statuses = block.slotTimes.map((time) => participant.availability[slotKey(block.date, time)]);
-    let status: SlotStatus = 'unavailable';
-    if (statuses.every((value) => value === 'preferred')) status = 'preferred';
-    else if (statuses.every((value) => value === 'preferred' || value === 'available')) status = 'available';
-    else if (statuses.every((value) => value === 'preferred' || value === 'available' || value === 'if_needed')) status = 'if_needed';
-    return { ...participant, availability: { [key]: status } };
-  });
-  return analyzeSlot({ ...poll, participants }, block.date, block.startTime);
+  return analyzeWindow(poll, block.date, block.startTime, block.slotTimes);
 }

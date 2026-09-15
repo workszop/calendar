@@ -11,6 +11,7 @@ import { usePollGrid } from '../hooks/usePollGrid';
 import { useGridStroke } from '../hooks/useGridStroke';
 import { ActionDock } from './ActionDock';
 import { SlotTable } from './SlotTable';
+import { TimeZoneNote } from './TimeZoneNote';
 import './calendar-workspace.css';
 
 interface AvailabilityPainterProps {
@@ -407,7 +408,9 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
         data-covered-slots={block.slotTimes.join(',')}
         data-finalized={isFinalized ? 'true' : 'false'}
         disabled={isSaving || isFinalized}
-        style={{ touchAction: 'pan-y' }}
+        // A cell consumes a touch gesture for painting, as in DayTimesEditor; the
+        // Time column and the page around the grid still scroll.
+        style={{ touchAction: 'none' }}
         aria-label={cellLabel}
         title={cellLabel}
         aria-pressed={status !== 'none'}
@@ -459,6 +462,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
       <section
         className="d-answer-grid"
         data-answer-grid
+        data-poll-timezone={poll.timezone}
         data-visual-group="answer-calendar"
         aria-labelledby="answer-grid-title"
       >
@@ -478,6 +482,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
             Select the times that work. Each cell follows the organizer's proposal.
           </p>
         </header>
+        <TimeZoneNote timeZone={poll.timezone} />
 
         <div className="d-calendar-table-wrap" aria-busy={isSaving} data-answer-table>
           <SlotTable

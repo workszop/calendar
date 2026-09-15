@@ -2,60 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BookOpen, CalendarCheck, CalendarDays, Check, Filter, HelpCircle, Lock, Star, Users, X } from 'lucide-react';
 import type { Poll, SlotAnalysis } from '../types';
 import { formatTimeSlot } from '../utils/calendar';
-import { getMeetingWindow, slotKey } from '../utils/consensus';
+import { getMeetingWindow, slotKey, summarizeWindowAttendance } from '../utils/consensus';
 import { analyzeGridBlock, getBlockStatus, type GridInterval } from '../utils/grid';
 import { usePollGrid } from '../hooks/usePollGrid';
 import { ActionDock } from './ActionDock';
 import { SlotTable } from './SlotTable';
+import { TimeZoneNote } from './TimeZoneNote';
 import './calendar-workspace.css';
-
-interface MeetingAttendance {
-  availableNames: string[];
-  preferredNames: string[];
-  ifNeededNames: string[];
-  unavailableNames: string[];
-  availableCount: number;
-}
-
-/**
- * A display cell can be shorter than the meeting duration. Keep the cell
- * analysis for local context, but calculate this separate summary for the
- * exact meeting window used by the finalization action.
- */
-function analyzeMeetingAttendance(poll: Poll, date: string, slotTimes: string[]): MeetingAttendance {
-  const availableNames: string[] = [];
-  const preferredNames: string[] = [];
-  const ifNeededNames: string[] = [];
-  const unavailableNames: string[] = [];
-
-  poll.participants.forEach((participant) => {
-    const statuses = slotTimes.map((time) => participant.availability[slotKey(date, time)]);
-    const allPreferred = statuses.length > 0 && statuses.every((status) => status === 'preferred');
-    const allAvailable = statuses.length > 0 && statuses.every((status) => status === 'preferred' || status === 'available');
-    const allPossible = statuses.length > 0 && statuses.every(
-      (status) => status === 'preferred' || status === 'available' || status === 'if_needed'
-    );
-
-    if (allPreferred) {
-      preferredNames.push(participant.name);
-      availableNames.push(participant.name);
-    } else if (allAvailable) {
-      availableNames.push(participant.name);
-    } else if (allPossible) {
-      ifNeededNames.push(participant.name);
-    } else {
-      unavailableNames.push(participant.name);
-    }
-  });
-
-  return {
-    availableNames,
-    preferredNames,
-    ifNeededNames,
-    unavailableNames,
-    availableCount: availableNames.length,
-  };
-}
 
 interface HeatmapGridProps {
   poll: Poll;
@@ -162,7 +115,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   // ─── Derived data ───
   const analyses = useMemo(() => {
     const map = new Map<string, SlotAnalysis>();
-    blocks.forEach((block, key) => map.set(key, analyzeGridBlock(poll, block)));
+    // Report each analysis under its row key: a partial block's first slot can
+    // differ from the row it sits on.
+    blocks.forEach((block, key) => map.set(key, { ...analyzeGridBlock(poll, block), slotKey: key }));
     return map;
   }, [poll, blocks]);
 
@@ -205,11 +160,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     return 'd-calendar-cell--none';
   };
 
-  const isSlotFinalized = (date: string, time: string) => {
-    const block = blocks.get(slotKey(date, time));
+  const isSlotFinalized = (key: string) => {
+    const block = blocks.get(key);
     if (!poll.finalizedSlot || !block) return false;
     return (
-      poll.finalizedSlot.date === date &&
+      poll.finalizedSlot.date === block.date &&
       block.startTime < poll.finalizedSlot.endTime &&
       block.endTime > poll.finalizedSlot.startTime
     );
@@ -248,9 +203,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
       endTime: block?.endTime ?? analysis.timeStr,
       meetingWindow,
       meetingAttendance: meetingWindow
-        ? analyzeMeetingAttendance(poll, analysis.date, meetingWindow.slotTimes)
+        ? summarizeWindowAttendance(poll, analysis.date, meetingWindow.slotTimes)
         : null,
-      isConfirmed: isSlotFinalized(analysis.date, analysis.timeStr),
+      isConfirmed: isSlotFinalized(analysis.slotKey),
       availableOnly: analysis.availableNames.filter((name) => !preferredSet.has(name)),
     };
   };
@@ -300,7 +255,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 : 'Busy'
       : null;
 
-    const isFinalized = isSlotFinalized(dateStr, timeStr);
+    const isFinalized = isSlotFinalized(key);
     const label = filteredParticipant
       ? `${heading?.weekday} ${heading?.dayMonth} ${displayTime}, ${filteredParticipant.name}: ${ownAnswer}`
       : `${heading?.weekday} ${heading?.dayMonth} ${displayTime}, ${analysis.availableCount} of ${totalParticipants} available` +
@@ -451,11 +406,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               </div>
               <p className="d-calendar-panel-note">Select a time to see who can attend.</p>
             </header>
+            <TimeZoneNote timeZone={poll.timezone} />
 
             <div
               className="d-calendar-table-wrap"
               onMouseLeave={() => setHoveredKey(null)}
               data-calendar-grid
+              data-poll-timezone={poll.timezone}
             >
               <SlotTable
                 dates={poll.dates}
@@ -482,7 +439,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   {inspectedDetail.dateHead?.weekday}, {inspectedDetail.dateHead?.dayMonth}
                 </h3>
                 <p className="d-calendar-inspector-time">
-                  {inspectedDetail.analysis.displayTime} – {formatTimeSlot(inspectedDetail.endTime)}
+                  {inspectedDetail.analysis.displayTime} – {formatTimeSlot(inspectedDetail.endTime)}{' '}
+                  <span className="d-calendar-zone-suffix">({poll.timezone})</span>
                 </p>
                 <p className="d-calendar-inspector-count">
                   {inspectedDetail.analysis.availableCount} of {totalParticipants} available
@@ -538,10 +496,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     <p className="d-calendar-kicker">Full meeting window</p>
                     <p className="d-calendar-meeting-range" data-meeting-window-range>
                       {formatTimeSlot(inspectedDetail.meetingWindow.startTime)} –{' '}
-                      {formatTimeSlot(inspectedDetail.meetingWindow.endTime)}
+                      {formatTimeSlot(inspectedDetail.meetingWindow.endTime)}{' '}
+                      <span className="d-calendar-zone-suffix">({poll.timezone})</span>
                     </p>
                     <p className="d-calendar-meeting-count" data-meeting-window-count>
-                      {inspectedDetail.meetingAttendance.availableCount} of {totalParticipants} available for full meeting
+                      {inspectedDetail.meetingAttendance.availableNames.length} of {totalParticipants} available for full meeting
                     </p>
                     {inspectedDetail.meetingAttendance.availableNames.length > 0 && (
                       <p className="d-calendar-meeting-attendees">
@@ -583,11 +542,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   {pinnedDetail.dateHead?.weekday}, {pinnedDetail.dateHead?.dayMonth}
                 </strong>
                 <span className="d-calendar-finalize-range" data-meeting-window-range>
-                  {formatTimeSlot(pinnedMeetingWindow.startTime)} – {formatTimeSlot(pinnedMeetingWindow.endTime)}
+                  {formatTimeSlot(pinnedMeetingWindow.startTime)} – {formatTimeSlot(pinnedMeetingWindow.endTime)}{' '}
+                  <span className="d-calendar-zone-suffix">({poll.timezone})</span>
                 </span>
               </div>
               <span className="d-calendar-finalize-count" data-meeting-window-count>
-                {pinnedDetail.meetingAttendance.availableCount} of {totalParticipants} available for full meeting
+                {pinnedDetail.meetingAttendance.availableNames.length} of {totalParticipants} available for full meeting
               </span>
             </div>
             <button
@@ -604,7 +564,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               className="d-calendar-primary-action"
               title={`Meeting: ${formatTimeSlot(pinnedMeetingWindow.startTime)} – ${formatTimeSlot(
                 pinnedMeetingWindow.endTime
-              )} (${poll.durationMinutes} min)`}
+              )} ${poll.timezone} (${poll.durationMinutes} min)`}
             >
               <CalendarCheck className="d-calendar-action-icon" aria-hidden="true" />
               Agree on this timing

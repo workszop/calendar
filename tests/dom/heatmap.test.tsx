@@ -3,6 +3,7 @@ import { createElement as h } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Poll } from '../../src/types';
 import { HeatmapGrid } from '../../src/components/HeatmapGrid';
+import { ConsensusPanel } from '../../src/components/ConsensusPanel';
 
 afterEach(cleanup);
 
@@ -243,5 +244,64 @@ describe('HeatmapGrid finalization control', () => {
       '1 of 2 available for full meeting'
     );
     expect(onFinalizeSlot).not.toHaveBeenCalled();
+  });
+});
+
+describe('poll time zone display', () => {
+  it('labels the group grid and every selected time with the poll zone', () => {
+    render(h(HeatmapGrid, {
+      poll: makePoll({ timezone: 'Asia/Kolkata', endHour: 11 }),
+      gridInterval: 30,
+      onFinalizeSlot: vi.fn(),
+      activeParticipantFilter: null,
+      onSelectParticipantFilter: () => {},
+    }));
+
+    const grid = document.querySelector<HTMLElement>('[data-calendar-grid]');
+    expect(grid?.dataset.pollTimezone).toBe('Asia/Kolkata');
+    expect(document.querySelector('[data-timezone-note]')?.textContent).toContain('Times in Asia/Kolkata');
+
+    fireEvent.click(document.getElementById('slot-2026-10-01-09:00') as HTMLElement);
+    expect(document.querySelector('.d-calendar-inspector-time')?.textContent).toContain('(Asia/Kolkata)');
+    const ranges = [...document.querySelectorAll('[data-meeting-window-range]')];
+    expect(ranges).toHaveLength(2);
+    ranges.forEach((range) => expect(range.textContent).toContain('(Asia/Kolkata)'));
+  });
+
+  it('shows the zone next to every consensus option', () => {
+    const poll = makePoll({ timezone: 'America/New_York', durationMinutes: 30, endHour: 11 });
+    render(h(ConsensusPanel, { poll }));
+    const zones = document.querySelectorAll('[data-option-timezone]');
+    expect(zones.length).toBe(4);
+    zones.forEach((zone) => expect(zone.textContent).toBe('(America/New_York)'));
+  });
+});
+
+describe('HeatmapGrid hourly alignment', () => {
+  it('puts a partial first hour on the clock-hour row and keeps its analysis and lock working', () => {
+    const onFinalizeSlot = vi.fn();
+    const poll = makePoll({
+      dates: ['2026-10-01', '2026-10-02'],
+      durationMinutes: 30,
+      proposedSlots: { '2026-10-01': ['09:00', '09:30'], '2026-10-02': ['09:30', '10:00'] },
+      participants: [{
+        id: 'a', name: 'Ann', timezone: 'UTC', updatedAt: '',
+        availability: { '2026-10-02T09:30': 'preferred' },
+      }],
+    });
+    render(h(HeatmapGrid, {
+      poll, gridInterval: 60, onFinalizeSlot, activeParticipantFilter: null, onSelectParticipantFilter: () => {},
+    }));
+
+    const rows = [...document.querySelectorAll('tbody tr')];
+    expect(rows).toHaveLength(2);
+    const partial = rows[0].querySelector<HTMLElement>('[data-slot-key="2026-10-02T09:00"]');
+    expect(partial?.getAttribute('aria-label')).toMatch(/9:30 AM – 10:00 AM, 1 of 1 available/);
+
+    fireEvent.click(partial!);
+    expect(document.querySelector<HTMLElement>('[data-selected-slot]')?.dataset.selectedSlot).toBe('2026-10-02T09:00');
+    expect(document.querySelector('.d-calendar-inspector-count')?.textContent).toContain('1 of 1 available');
+    fireEvent.click(screen.getByRole('button', { name: 'Agree on this timing' }));
+    expect(onFinalizeSlot).toHaveBeenCalledWith('2026-10-02', '09:30', '10:00');
   });
 });

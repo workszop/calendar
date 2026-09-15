@@ -1,4 +1,4 @@
-import type { DayHours, Poll, SlotAnalysis } from '../types';
+import type { DayHours, Poll, SlotAnalysis, SlotStatus } from '../types';
 import { formatTimeSlot, addMinutesToTime, hourToTimeStr } from './calendar';
 
 export interface MeetingWindowOption {
@@ -22,6 +22,12 @@ export interface MeetingWindow {
   endTime: string;
   slotTimes: string[];
 }
+
+/** The poll fields that decide which slots exist and how long a meeting is. */
+export type PollSlotConfig = Pick<
+  Poll,
+  'durationMinutes' | 'slotInterval' | 'startHour' | 'endHour' | 'dayHours' | 'proposedSlots'
+>;
 
 // Canonical availability map key for one atomic slot
 export function slotKey(date: string, time: string): string {
@@ -51,14 +57,14 @@ export function generateTimeSlots(startHour: number, endHour: number, intervalMi
 }
 
 // Explicit slots proposed for one date, or null when the poll uses hour windows
-function getProposedSlots(poll: Poll, date: string): string[] | null {
+function getProposedSlots(poll: PollSlotConfig, date: string): string[] | null {
   const slots = poll.proposedSlots?.[date];
   return slots && slots.length ? [...slots].sort() : null;
 }
 
 // Outer hour window for one date: the span of its proposed slots, its
 // override, or the poll-wide default
-export function getDayHours(poll: Poll, date: string): DayHours {
+export function getDayHours(poll: PollSlotConfig, date: string): DayHours {
   const proposed = getProposedSlots(poll, date);
   if (proposed) {
     return {
@@ -72,7 +78,7 @@ export function getDayHours(poll: Poll, date: string): DayHours {
 }
 
 // Slots suggested for one date
-export function generateDaySlots(poll: Poll, date: string): string[] {
+export function generateDaySlots(poll: PollSlotConfig, date: string): string[] {
   const proposed = getProposedSlots(poll, date);
   if (proposed) return proposed;
   const { startHour, endHour } = getDayHours(poll, date);
@@ -86,7 +92,8 @@ export function generateAllTimeSlots(poll: Poll): string[] {
   return [...set].sort();
 }
 
-function timeToMinutes(timeStr: string): number {
+// "HH:mm" -> minutes after midnight ("09:30" -> 570)
+export function timeToMinutes(timeStr: string): number {
   const [hours, minutes] = timeStr.split(':').map(Number);
   return hours * 60 + minutes;
 }
@@ -96,7 +103,7 @@ function timeToMinutes(timeStr: string): number {
  * Returns null when the start is not a proposed slot or the meeting would
  * cross that date's availability window.
  */
-export function getMeetingWindow(poll: Poll, date: string, startTime: string): MeetingWindow | null {
+export function getMeetingWindow(poll: PollSlotConfig, date: string, startTime: string): MeetingWindow | null {
   const duration = poll.durationMinutes || 30;
   const interval = poll.slotInterval || 30;
   const { startHour, endHour } = getDayHours(poll, date);
@@ -134,53 +141,122 @@ export function getMeetingWindow(poll: Poll, date: string, startTime: string): M
   };
 }
 
-// Analyze single atomic slot
-export function analyzeSlot(poll: Poll, date: string, timeStr: string): SlotAnalysis {
-  const key = slotKey(date, timeStr);
-  const total = poll.participants.length;
+/**
+ * First of these dates on which no run of back-to-back proposed slots covers
+ * the meeting duration, or undefined when every date fits. A date fits when
+ * getMeetingWindow accepts at least one of its slot starts, the same rule the
+ * server applies on create and add-dates.
+ */
+export function findDateWithoutMeetingFit(poll: PollSlotConfig, dates: string[]): string | undefined {
+  return dates.find(
+    (date) => !generateDaySlots(poll, date).some((startTime) => getMeetingWindow(poll, date, startTime))
+  );
+}
 
-  const availableNames: string[] = [];
-  const preferredNames: string[] = [];
-  const ifNeededNames: string[] = [];
-  const unavailableNames: string[] = [];
+// ─── Attendance ───
 
-  let availableCount = 0;
-  let preferredCount = 0;
-  let ifNeededCount = 0;
-  let unavailableCount = 0;
-
-  poll.participants.forEach((p) => {
-    const status = p.availability[key];
-    if (status === 'preferred') {
-      preferredCount++;
-      availableCount++;
-      preferredNames.push(p.name);
-      availableNames.push(p.name);
-    } else if (status === 'available') {
-      availableCount++;
-      availableNames.push(p.name);
+/**
+ * How one participant can attend every atomic slot of a window: preferred only
+ * when every slot is preferred, available when every slot is preferred or
+ * available, if needed when no slot is busy or unanswered, otherwise
+ * unavailable. An empty window is unavailable.
+ */
+export function getWindowAttendance(
+  availability: Record<string, SlotStatus>,
+  date: string,
+  slotTimes: string[]
+): SlotStatus {
+  if (!slotTimes.length) return 'unavailable';
+  let attendance: SlotStatus = 'preferred';
+  for (const time of slotTimes) {
+    const status = availability[slotKey(date, time)];
+    if (status === 'preferred') continue;
+    if (status === 'available') {
+      if (attendance === 'preferred') attendance = 'available';
     } else if (status === 'if_needed') {
-      ifNeededCount++;
-      ifNeededNames.push(p.name);
+      attendance = 'if_needed';
     } else {
-      unavailableCount++;
-      unavailableNames.push(p.name);
+      return 'unavailable';
+    }
+  }
+  return attendance;
+}
+
+export interface WindowAttendanceSummary {
+  /** Everyone who can attend the whole window, preferred included. */
+  availableNames: string[];
+  preferredNames: string[];
+  ifNeededNames: string[];
+  unavailableNames: string[];
+  /** 3 per preferred, 2 per available, 1 per if-needed participant. */
+  score: number;
+}
+
+const ATTENDANCE_SCORE: Record<SlotStatus, number> = {
+  preferred: 3,
+  available: 2,
+  if_needed: 1,
+  unavailable: 0,
+};
+
+/** Group participants by whole-window attendance, in participant order. */
+export function summarizeWindowAttendance(
+  poll: Pick<Poll, 'participants'>,
+  date: string,
+  slotTimes: string[]
+): WindowAttendanceSummary {
+  const summary: WindowAttendanceSummary = {
+    availableNames: [],
+    preferredNames: [],
+    ifNeededNames: [],
+    unavailableNames: [],
+    score: 0,
+  };
+  poll.participants.forEach((participant) => {
+    const attendance = getWindowAttendance(participant.availability, date, slotTimes);
+    summary.score += ATTENDANCE_SCORE[attendance];
+    if (attendance === 'preferred') {
+      summary.preferredNames.push(participant.name);
+      summary.availableNames.push(participant.name);
+    } else if (attendance === 'available') {
+      summary.availableNames.push(participant.name);
+    } else if (attendance === 'if_needed') {
+      summary.ifNeededNames.push(participant.name);
+    } else {
+      summary.unavailableNames.push(participant.name);
     }
   });
+  return summary;
+}
 
-  const attendanceRate = total > 0 ? availableCount / total : 0;
+// Analyze single atomic slot
+export function analyzeSlot(poll: Poll, date: string, timeStr: string): SlotAnalysis {
+  return analyzeWindow(poll, date, timeStr, [timeStr]);
+}
+
+/**
+ * Analyze a display cell covering several atomic slots, reported under its
+ * first slot. A participant counts only for what they can attend throughout.
+ */
+export function analyzeWindow(poll: Poll, date: string, timeStr: string, slotTimes: string[]): SlotAnalysis {
+  const total = poll.participants.length;
+  const { availableNames, preferredNames, ifNeededNames, unavailableNames } = summarizeWindowAttendance(
+    poll,
+    date,
+    slotTimes
+  );
 
   return {
-    slotKey: key,
+    slotKey: slotKey(date, timeStr),
     date,
     timeStr,
     displayTime: formatTimeSlot(timeStr),
-    availableCount,
-    preferredCount,
-    ifNeededCount,
-    unavailableCount,
+    availableCount: availableNames.length,
+    preferredCount: preferredNames.length,
+    ifNeededCount: ifNeededNames.length,
+    unavailableCount: unavailableNames.length,
     totalParticipants: total,
-    attendanceRate,
+    attendanceRate: total > 0 ? availableNames.length / total : 0,
     availableNames,
     preferredNames,
     ifNeededNames,
@@ -204,50 +280,8 @@ export function findBestMeetingWindows(poll: Poll): MeetingWindowOption[] {
       const displayRange = `${formatTimeSlot(startTime)} – ${formatTimeSlot(endTime)}`;
 
       // Evaluate each participant across all slots in this window
-      const availableAttendees: string[] = [];
-      const preferredAttendees: string[] = [];
-      const ifNeededAttendees: string[] = [];
-      const unavailableAttendees: string[] = [];
-
-      let windowScore = 0;
-
-      poll.participants.forEach((p) => {
-        let isAllAvailable = true;
-        let isAllPreferred = true;
-        let hasIfNeeded = false;
-        let isAnyUnavailable = false;
-
-        for (const slotTime of windowSlots) {
-          const status = p.availability[slotKey(date, slotTime)];
-          if (status === 'preferred') {
-            // still good
-          } else if (status === 'available') {
-            isAllPreferred = false;
-          } else if (status === 'if_needed') {
-            isAllAvailable = false;
-            isAllPreferred = false;
-            hasIfNeeded = true;
-          } else {
-            isAllAvailable = false;
-            isAllPreferred = false;
-            isAnyUnavailable = true;
-          }
-        }
-
-        if (isAllPreferred) {
-          preferredAttendees.push(p.name);
-          availableAttendees.push(p.name);
-          windowScore += 3;
-        } else if (isAllAvailable) {
-          availableAttendees.push(p.name);
-          windowScore += 2;
-        } else if (hasIfNeeded && !isAnyUnavailable) {
-          ifNeededAttendees.push(p.name);
-          windowScore += 1;
-        } else {
-          unavailableAttendees.push(p.name);
-        }
-      });
+      const attendance = summarizeWindowAttendance(poll, date, windowSlots);
+      const availableAttendees = attendance.availableNames;
 
       const availableCount = availableAttendees.length;
       const percentage = totalParticipants > 0 ? Math.round((availableCount / totalParticipants) * 100) : 0;
@@ -262,11 +296,11 @@ export function findBestMeetingWindows(poll: Poll): MeetingWindowOption[] {
         totalParticipants,
         percentage,
         allAvailable,
-        score: windowScore,
+        score: attendance.score,
         availableAttendees,
-        preferredAttendees,
-        ifNeededAttendees,
-        unavailableAttendees,
+        preferredAttendees: attendance.preferredNames,
+        ifNeededAttendees: attendance.ifNeededNames,
+        unavailableAttendees: attendance.unavailableNames,
       });
     }
   }

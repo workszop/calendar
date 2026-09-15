@@ -252,6 +252,38 @@
   text-align: var(--ui-end, right);
 }
 
+/* The poll zone every grid time is shown in */
+.d-calendar-timezone {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin: .75rem 0;
+  color: var(--ink-2);
+  font-size: var(--ui-small, .875rem);
+  text-align: var(--ui-align, left);
+}
+
+.d-calendar-grid-panel > .d-calendar-timezone {
+  padding-inline: 1.2rem;
+}
+
+.d-calendar-timezone-icon {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  color: var(--blue);
+}
+
+.d-calendar-timezone-hint {
+  color: var(--ink-2);
+}
+
+.d-calendar-zone-suffix {
+  color: var(--ink-2);
+  font-size: var(--ui-small, .875rem);
+  font-weight: 500;
+}
+
 .d-calendar-table-wrap {
   width: 100%;
   overflow-x: auto;

@@ -148,7 +148,8 @@ describe('organizer access', () => {
     fireEvent.change(screen.getByLabelText(/Meeting name/), { target: { value: 'Fresh poll' } });
     fireEvent.click(screen.getByRole('button', { name: 'Next 3 Days' }));
     for (const slot of document.querySelectorAll<HTMLButtonElement>('[data-proposal-grid] [data-slot-key]')) {
-      if (slot.dataset.slotKey?.endsWith('T09:00')) fireEvent.click(slot);
+      // Two back-to-back half-hours hold the default 60-minute meeting.
+      if (/T09:(00|30)$/.test(slot.dataset.slotKey ?? '')) fireEvent.click(slot);
     }
     fireEvent.click(screen.getByRole('button', { name: 'Create poll' }));
 

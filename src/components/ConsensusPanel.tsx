@@ -77,7 +77,9 @@ export const ConsensusPanel: React.FC<ConsensusPanelProps> = ({ poll, onFinalize
                         <Clock className="w-4 h-4" />
                         {topOption.displayRange} ({poll.durationMinutes} min)
                       </span>
-                      <span className="text-xs font-medium text-stone-500">({poll.timezone})</span>
+                      <span className="text-xs font-medium text-stone-500" data-option-timezone>
+                        ({poll.timezone})
+                      </span>
                     </div>
                   </div>
                 );
@@ -202,6 +204,9 @@ export const ConsensusPanel: React.FC<ConsensusPanelProps> = ({ poll, onFinalize
                     <div className="text-xs font-medium text-stone-700 flex items-center gap-1 mt-0.5">
                       <Clock className="w-3.5 h-3.5" />
                       {opt.displayRange}
+                      <span className="text-stone-500" data-option-timezone>
+                        ({poll.timezone})
+                      </span>
                     </div>
 
                     {/* Attendees count details */}

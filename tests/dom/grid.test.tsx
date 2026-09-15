@@ -25,17 +25,40 @@ describe('grid display intervals', () => {
     expect(result.current.timeSlots).toEqual(['09:00', '09:30', '10:00', '10:30']);
   });
 
-  it('preserves partial final hours and dates with different proposed hours', () => {
+  it('preserves partial final hours and aligns a partial first hour to the clock', () => {
     const { result } = renderHook(() => usePollGrid({
       ...poll, dates: ['2026-10-01', '2026-10-02'], endHour: 10.5,
       dayHours: { '2026-10-02': { startHour: 13.5, endHour: 15 } },
     }, 60));
-    expect(result.current.timeSlots).toEqual(['09:00', '10:00', '13:30', '14:30']);
+    expect(result.current.timeSlots).toEqual(['09:00', '10:00', '13:00', '14:00']);
     expect(result.current.blocks.get('2026-10-01T10:00')).toEqual({
       date: '2026-10-01', startTime: '10:00', endTime: '10:30', slotTimes: ['10:00'],
     });
-    expect(result.current.blocks.get('2026-10-02T14:30')?.endTime).toBe('15:00');
+    expect(result.current.blocks.get('2026-10-02T13:00')).toEqual({
+      date: '2026-10-02', startTime: '13:30', endTime: '14:00', slotTimes: ['13:30'],
+    });
+    expect(result.current.blocks.get('2026-10-02T14:00')?.endTime).toBe('15:00');
     expect(result.current.isProposed('2026-10-02', '09:00')).toBe(false);
+  });
+
+  it('keeps two days on the same hourly rows when they start on different half-hours', () => {
+    const { result } = renderHook(() => usePollGrid({
+      ...poll,
+      dates: ['2026-10-01', '2026-10-02'],
+      proposedSlots: {
+        '2026-10-01': ['09:00', '09:30', '10:00', '10:30'],
+        '2026-10-02': ['09:30', '10:00', '10:30', '11:00'],
+      },
+    }, 60));
+    expect(result.current.timeSlots).toEqual(['09:00', '10:00', '11:00']);
+    expect(result.current.blocks.get('2026-10-01T09:00')?.slotTimes).toEqual(['09:00', '09:30']);
+    expect(result.current.blocks.get('2026-10-02T09:00')).toEqual({
+      date: '2026-10-02', startTime: '09:30', endTime: '10:00', slotTimes: ['09:30'],
+    });
+    expect(result.current.blocks.get('2026-10-01T10:00')?.slotTimes).toEqual(['10:00', '10:30']);
+    expect(result.current.blocks.get('2026-10-02T10:00')?.slotTimes).toEqual(['10:00', '10:30']);
+    expect(result.current.blocks.get('2026-10-02T11:00')?.slotTimes).toEqual(['11:00']);
+    expect(result.current.isProposed('2026-10-01', '11:00')).toBe(false);
   });
 
   it('groups existing quarter-hour polls without dropping any votes', () => {
@@ -48,8 +71,17 @@ describe('grid display intervals', () => {
       ...poll, proposedSlots: { '2026-10-01': ['09:30', '10:00', '10:30', '13:00'] },
     }, 60));
     expect([...result.current.blocks.values()].map((b) => b.slotTimes)).toEqual([
-      ['09:30', '10:00'], ['10:30'], ['13:00'],
+      ['09:30'], ['10:00', '10:30'], ['13:00'],
     ]);
     expect(result.current.isProposed('2026-10-01', '11:00')).toBe(false);
+  });
+
+  it('gives a second piece inside one hour its own row instead of dropping it', () => {
+    const { result } = renderHook(() => usePollGrid({
+      ...poll, slotInterval: 15, proposedSlots: { '2026-10-01': ['09:00', '09:30', '09:45'] },
+    }, 60));
+    expect(result.current.blocks.get('2026-10-01T09:00')?.slotTimes).toEqual(['09:00']);
+    expect(result.current.blocks.get('2026-10-01T09:30')?.slotTimes).toEqual(['09:30', '09:45']);
+    expect(result.current.timeSlots).toEqual(['09:00', '09:30']);
   });
 });

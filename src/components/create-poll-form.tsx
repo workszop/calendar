@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Poll } from '../types';
 import { formatDateHeading, toDateStr } from '../utils/calendar';
-import { isValidHourWindow } from '../utils/consensus';
+import { findDateWithoutMeetingFit, isValidHourWindow } from '../utils/consensus';
 import { latestPollDate, MAX_POLL_DATES } from '../utils/limits';
 import { getStoredUser, setStoredUser } from '../utils/storage';
 import { DRAFT_SLOT_INTERVAL, useProposalDraft } from '../hooks/useProposalDraft';
@@ -74,10 +74,12 @@ export function validateCreatePollTitle(title: string): Pick<CreatePollFormError
 /**
  * Validate the complete creation draft and return the same future dates that
  * should be sent to the API. Both the compatibility modal and the page use
- * this function so empty-day and hour-window semantics cannot drift.
+ * this function so empty-day and hour-window semantics cannot drift. With a
+ * duration, every date must also hold a back-to-back run as long as the
+ * meeting (the server rejects the poll otherwise).
  */
 export function validateCreatePoll(
-  values: Pick<CreatePollFormValues, 'title' | 'draft'>,
+  values: Pick<CreatePollFormValues, 'title' | 'draft'> & Partial<Pick<CreatePollFormValues, 'durationMinutes'>>,
   todayStr = toDateStr(new Date())
 ): CreatePollValidation {
   const dates = values.draft.selectedDates.filter((date) => date >= todayStr);
@@ -96,6 +98,16 @@ export function validateCreatePoll(
     const emptyDay = values.draft.findEmptyDay(dates);
     if (emptyDay) {
       errors.hours = `${formatDateHeading(emptyDay).full}: propose at least one time.`;
+    } else if (values.durationMinutes) {
+      const { durationMinutes } = values;
+      const { proposedSlots } = values.draft.slotsFor(dates);
+      const shortDay = findDateWithoutMeetingFit(
+        { durationMinutes, slotInterval: DRAFT_SLOT_INTERVAL, startHour, endHour, proposedSlots },
+        dates
+      );
+      if (shortDay) {
+        errors.hours = `${formatDateHeading(shortDay).full}: propose at least ${durationMinutes} minutes of back-to-back times.`;
+      }
     }
   }
 

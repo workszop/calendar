@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   addMinutesToTime,
+  describeTimeZoneDifference,
   formatHour,
   formatTimeSlot,
+  generateGoogleCalendarUrl,
   generateIcsContent,
   generateOutlookUrl,
   hourToTimeStr,
   toCompactIso,
   toDateStr,
+  zonedTimeToUtc,
 } from '../src/utils/calendar';
 import type { FinalizedSlot, Poll } from '../src/types';
 import { slotKey } from '../src/utils/consensus';
@@ -108,8 +111,9 @@ describe('iCalendar export', () => {
     expect(first).toContain('SUMMARY:Planning\\, review\\; Q4');
     expect(first).toContain('DESCRIPTION:Line one\\nLine two\\, with a semicolon\\; and a \\\\ slash');
     expect(first).toContain('LOCATION:Room\\, A\\; floor 2');
-    expect(first).toContain('DTSTART:20261001T233000');
-    expect(first).toContain('DTEND:20261002T000000');
+    expect(first).toContain('DTSTART:20261001T233000Z');
+    expect(first).toContain('DTEND:20261002T000000Z');
+    expect(first).toMatch(/^DTSTAMP:\d{8}T\d{6}Z$/m);
     expect(first).not.toContain('\r\nX-');
   });
 
@@ -131,10 +135,136 @@ describe('calendar provider URLs', () => {
     vi.stubGlobal('window', { location: { href: 'https://timesync.test/poll' } });
     try {
       const url = new URL(generateOutlookUrl(poll, slot));
-      expect(url.searchParams.get('startdt')).toBe('2026-10-01T23:30:00');
-      expect(url.searchParams.get('enddt')).toBe('2026-10-02T00:00:00');
+      expect(url.searchParams.get('startdt')).toBe('2026-10-01T23:30:00Z');
+      expect(url.searchParams.get('enddt')).toBe('2026-10-02T00:00:00Z');
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('zonedTimeToUtc', () => {
+  const iso = (date: string, time: string, zone: string) => zonedTimeToUtc(date, time, zone).toISOString();
+
+  it('converts wall-clock times using the zone offset on that date', () => {
+    expect(iso('2026-07-01', '09:00', 'Europe/Warsaw')).toBe('2026-07-01T07:00:00.000Z');
+    expect(iso('2026-12-01', '09:00', 'Europe/Warsaw')).toBe('2026-12-01T08:00:00.000Z');
+    expect(iso('2026-10-01', '09:00', 'America/New_York')).toBe('2026-10-01T13:00:00.000Z');
+    expect(iso('2026-10-01', '09:00', 'UTC')).toBe('2026-10-01T09:00:00.000Z');
+    expect(iso('2026-10-01', '09:00', 'Asia/Kolkata')).toBe('2026-10-01T03:30:00.000Z');
+  });
+
+  it('treats 24:00 as the next midnight in the zone', () => {
+    expect(iso('2026-10-01', '24:00', 'Asia/Kolkata')).toBe('2026-10-01T18:30:00.000Z');
+  });
+
+  it('moves a time inside a spring-forward gap forward by the gap length', () => {
+    // Europe/Warsaw jumps from 02:00 to 03:00 on 2026-03-29.
+    expect(iso('2026-03-29', '02:30', 'Europe/Warsaw')).toBe('2026-03-29T01:30:00.000Z');
+    expect(iso('2026-03-29', '03:00', 'Europe/Warsaw')).toBe('2026-03-29T01:00:00.000Z');
+    // America/New_York jumps from 02:00 to 03:00 on 2026-03-08.
+    expect(iso('2026-03-08', '02:30', 'America/New_York')).toBe('2026-03-08T07:30:00.000Z');
+  });
+
+  it('picks the earlier instant for a time repeated by a fall-back overlap', () => {
+    // Europe/Warsaw repeats 02:00-03:00 on 2026-10-25.
+    expect(iso('2026-10-25', '02:30', 'Europe/Warsaw')).toBe('2026-10-25T00:30:00.000Z');
+    expect(iso('2026-10-25', '03:00', 'Europe/Warsaw')).toBe('2026-10-25T02:00:00.000Z');
+    // America/New_York repeats 01:00-02:00 on 2026-11-01.
+    expect(iso('2026-11-01', '01:30', 'America/New_York')).toBe('2026-11-01T05:30:00.000Z');
+  });
+
+  it('falls back to UTC for an unknown zone name', () => {
+    expect(iso('2026-10-01', '09:00', 'Not/AZone')).toBe('2026-10-01T09:00:00.000Z');
+  });
+});
+
+describe('zoned calendar exports', () => {
+  const zonedSlot = (date: string, startTime: string, endTime: string): FinalizedSlot => ({
+    date, startTime, endTime, confirmedBy: 'Ada', confirmedAt: '',
+  });
+
+  function exportsFor(timezone: string, exportSlot: FinalizedSlot) {
+    vi.stubGlobal('window', { location: { href: 'https://timesync.test/poll' } });
+    try {
+      const zoned = { ...poll, timezone };
+      const ics = generateIcsContent(zoned, exportSlot);
+      const google = new URL(generateGoogleCalendarUrl(zoned, exportSlot));
+      const outlook = new URL(generateOutlookUrl(zoned, exportSlot));
+      return {
+        dtstart: ics.match(/^DTSTART:(.*)\r$/m)?.[1],
+        dtend: ics.match(/^DTEND:(.*)\r$/m)?.[1],
+        googleDates: google.searchParams.get('dates'),
+        ctz: google.searchParams.get('ctz'),
+        startdt: outlook.searchParams.get('startdt'),
+        enddt: outlook.searchParams.get('enddt'),
+      };
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it('exports Europe/Warsaw in UTC on both sides of the autumn DST change', () => {
+    expect(exportsFor('Europe/Warsaw', zonedSlot('2026-10-24', '09:00', '10:00'))).toEqual({
+      dtstart: '20261024T070000Z',
+      dtend: '20261024T080000Z',
+      googleDates: '20261024T070000Z/20261024T080000Z',
+      ctz: 'Europe/Warsaw',
+      startdt: '2026-10-24T07:00:00Z',
+      enddt: '2026-10-24T08:00:00Z',
+    });
+    expect(exportsFor('Europe/Warsaw', zonedSlot('2026-10-26', '09:00', '10:00'))).toMatchObject({
+      dtstart: '20261026T080000Z',
+      googleDates: '20261026T080000Z/20261026T090000Z',
+      startdt: '2026-10-26T08:00:00Z',
+    });
+  });
+
+  it('keeps a meeting across the overlap night at its real length', () => {
+    // 01:30-03:30 local on the fall-back night lasts three real hours.
+    expect(exportsFor('Europe/Warsaw', zonedSlot('2026-10-25', '01:30', '03:30'))).toMatchObject({
+      dtstart: '20261024T233000Z',
+      dtend: '20261025T023000Z',
+    });
+  });
+
+  it('exports America/New_York, UTC and a half-hour zone', () => {
+    expect(exportsFor('America/New_York', zonedSlot('2026-10-01', '09:00', '09:30'))).toEqual({
+      dtstart: '20261001T130000Z',
+      dtend: '20261001T133000Z',
+      googleDates: '20261001T130000Z/20261001T133000Z',
+      ctz: 'America/New_York',
+      startdt: '2026-10-01T13:00:00Z',
+      enddt: '2026-10-01T13:30:00Z',
+    });
+    expect(exportsFor('UTC', zonedSlot('2026-10-01', '09:00', '09:30'))).toMatchObject({
+      dtstart: '20261001T090000Z',
+      ctz: 'UTC',
+      startdt: '2026-10-01T09:00:00Z',
+    });
+    expect(exportsFor('Asia/Kolkata', zonedSlot('2026-10-01', '23:30', '24:00'))).toEqual({
+      dtstart: '20261001T180000Z',
+      dtend: '20261001T183000Z',
+      googleDates: '20261001T180000Z/20261001T183000Z',
+      ctz: 'Asia/Kolkata',
+      startdt: '2026-10-01T18:00:00Z',
+      enddt: '2026-10-01T18:30:00Z',
+    });
+  });
+});
+
+describe('describeTimeZoneDifference', () => {
+  const summer = new Date('2026-07-01T12:00:00Z');
+
+  it('says nothing when the viewer is in the poll zone', () => {
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'Europe/Warsaw', summer)).toBeNull();
+  });
+
+  it('describes the current offset difference from the viewer side', () => {
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'America/New_York', summer)).toBe('your time is 6 h earlier');
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'Asia/Kolkata', summer)).toBe('your time is 3 h 30 min later');
+    expect(describeTimeZoneDifference('UTC', 'Europe/London', new Date('2026-01-15T12:00:00Z'))).toBe(
+      'your clock shows the same time'
+    );
   });
 });

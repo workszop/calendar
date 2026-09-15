@@ -76,34 +76,158 @@ export function toCompactIso(date: string, time: string): string {
   return `${year}${month}${day}T${hour}${minute}00`;
 }
 
-function toCalendarDateTime(date: string, time: string): string {
-  const normalized = normalizeCalendarDateTime(date, time);
-  return `${normalized.date}T${normalized.time}:00`;
+// ─── Time zones ───
+// Poll times are wall-clock values in the poll's IANA zone. Exports need real
+// instants, so they convert through the zone's UTC offset as reported by Intl.
+
+const MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+const zoneFormatterCache = new Map<string, Intl.DateTimeFormat | null>();
+
+function getZoneFormatter(timeZone: string): Intl.DateTimeFormat | null {
+  if (zoneFormatterCache.has(timeZone)) return zoneFormatterCache.get(timeZone)!;
+  let formatter: Intl.DateTimeFormat | null = null;
+  try {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    // An unknown zone name: callers fall back to UTC.
+  }
+  zoneFormatterCache.set(timeZone, formatter);
+  return formatter;
+}
+
+/** Whether the runtime knows this IANA zone name. */
+export function isValidTimeZone(timeZone: string): boolean {
+  return Boolean(timeZone) && getZoneFormatter(timeZone) !== null;
+}
+
+/**
+ * The zone's UTC offset in minutes at one instant, e.g. +120 for
+ * Europe/Warsaw in summer and +330 for Asia/Kolkata. Unknown zones are UTC.
+ */
+export function getTimeZoneOffsetMinutes(timeZone: string, instant: Date): number {
+  const formatter = getZoneFormatter(timeZone);
+  if (!formatter) return 0;
+  const parts: Record<string, number> = {};
+  formatter.formatToParts(instant).forEach(({ type, value }) => {
+    if (type !== 'literal') parts[type] = Number(value);
+  });
+  const wallAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  const wholeSeconds = Math.floor(instant.getTime() / 1000) * 1000;
+  return Math.round((wallAsUtc - wholeSeconds) / MINUTE_MS);
+}
+
+/**
+ * Convert a wall-clock date ("YYYY-MM-DD") and time ("HH:mm", 24:00 allowed as
+ * next-day midnight) in an IANA zone to the UTC instant it names.
+ *
+ * DST edges resolve like Temporal's `disambiguation: 'compatible'`:
+ * - a time inside an overlap (clocks go back, the time happens twice) maps to
+ *   the earlier instant, i.e. the one still using the pre-transition offset;
+ * - a time inside a gap (clocks go forward, the time never happens) is moved
+ *   forward by the gap length, e.g. 02:30 in Europe/Warsaw on the spring
+ *   change becomes 03:30 local (01:30 UTC).
+ * Unknown zone names are treated as UTC.
+ */
+export function zonedTimeToUtc(date: string, time: string, timeZone: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
+  // Date.UTC rolls hour 24 over to the next day on its own.
+  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+
+  // Transitions are months apart, so a day either side sees at most one change.
+  const offsetBefore = getTimeZoneOffsetMinutes(timeZone, new Date(wallAsUtc - DAY_MS));
+  const offsetAfter = getTimeZoneOffsetMinutes(timeZone, new Date(wallAsUtc + DAY_MS));
+  const candidates = [...new Set([offsetBefore, offsetAfter])]
+    .map((offset) => wallAsUtc - offset * MINUTE_MS)
+    .filter((instant) => wallAsUtc - getTimeZoneOffsetMinutes(timeZone, new Date(instant)) * MINUTE_MS === instant)
+    .sort((a, b) => a - b);
+
+  if (candidates.length) return new Date(candidates[0]);
+  // Gap: apply the offset in force before the jump, which lands after it.
+  return new Date(wallAsUtc - offsetBefore * MINUTE_MS);
+}
+
+/** A UTC instant in the iCalendar/Google compact form, e.g. "20261001T073000Z". */
+export function toCompactUtc(instant: Date): string {
+  return instant.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** A UTC instant as ISO 8601 without milliseconds, e.g. "2026-10-01T07:30:00Z". */
+function toIsoUtc(instant: Date): string {
+  return instant.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function slotInstants(poll: Poll, slot: FinalizedSlot): { start: Date; end: Date } {
+  return {
+    start: zonedTimeToUtc(slot.date, slot.startTime, poll.timezone),
+    end: zonedTimeToUtc(slot.date, slot.endTime, poll.timezone),
+  };
+}
+
+/** The browser's own IANA zone, or UTC when the runtime does not say. */
+export function getViewerTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+function formatOffsetDistance(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!rest) return `${hours} h`;
+  return hours ? `${hours} h ${rest} min` : `${rest} min`;
+}
+
+/**
+ * A short hint comparing the viewer's clock with the poll zone right now, e.g.
+ * "your time is 6 h earlier". Null when both zones are the same name.
+ */
+export function describeTimeZoneDifference(
+  pollTimeZone: string,
+  viewerTimeZone: string,
+  now: Date = new Date()
+): string | null {
+  if (!pollTimeZone || pollTimeZone === viewerTimeZone) return null;
+  const difference =
+    getTimeZoneOffsetMinutes(viewerTimeZone, now) - getTimeZoneOffsetMinutes(pollTimeZone, now);
+  if (difference === 0) return 'your clock shows the same time';
+  return `your time is ${formatOffsetDistance(Math.abs(difference))} ${difference < 0 ? 'earlier' : 'later'}`;
 }
 
 export function generateGoogleCalendarUrl(poll: Poll, slot: FinalizedSlot): string {
-  const startIso = toCompactIso(slot.date, slot.startTime);
-  const endIso = toCompactIso(slot.date, slot.endTime);
+  const { start, end } = slotInstants(poll, slot);
 
   const title = encodeURIComponent(poll.title);
   const details = encodeURIComponent(
     `${poll.description ? poll.description + '\n\n' : ''}Agreed via TimeSync Poll: ${window.location.href}\nConfirmed by: ${slot.confirmedBy}`
   );
   const location = encodeURIComponent(poll.location || '');
+  const zone = isValidTimeZone(poll.timezone) ? `&ctz=${encodeURIComponent(poll.timezone)}` : '';
 
-  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startIso}/${endIso}&details=${details}&location=${location}`;
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${toCompactUtc(start)}/${toCompactUtc(end)}&details=${details}&location=${location}${zone}`;
 }
 
 export function generateOutlookUrl(poll: Poll, slot: FinalizedSlot): string {
-  const startDateTime = toCalendarDateTime(slot.date, slot.startTime);
-  const endDateTime = toCalendarDateTime(slot.date, slot.endTime);
+  const { start, end } = slotInstants(poll, slot);
 
   const params = new URLSearchParams({
     path: '/calendar/action/compose',
     rru: 'addevent',
     subject: poll.title,
-    startdt: startDateTime,
-    enddt: endDateTime,
+    startdt: toIsoUtc(start),
+    enddt: toIsoUtc(end),
     body: `${poll.description || ''}\n\nAgreed timing poll: ${window.location.href}`,
     location: poll.location || '',
   });
@@ -160,14 +284,9 @@ function stableIcsUid(poll: Poll, slot: FinalizedSlot): string {
   return `${poll.id}-${compactDate}T${compactTime}@timesync.app`;
 }
 
-function formatIcsUtcTimestamp(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-}
-
 /** Build an RFC 5545 calendar object for deterministic, testable exports. */
 export function generateIcsContent(poll: Poll, slot: FinalizedSlot): string {
-  const startIso = toCompactIso(slot.date, slot.startTime);
-  const endIso = toCompactIso(slot.date, slot.endTime);
+  const { start, end } = slotInstants(poll, slot);
 
   const lines = [
     'BEGIN:VCALENDAR',
@@ -177,9 +296,9 @@ export function generateIcsContent(poll: Poll, slot: FinalizedSlot): string {
     'METHOD:PUBLISH',
     'BEGIN:VEVENT',
     `UID:${stableIcsUid(poll, slot)}`,
-    `DTSTAMP:${formatIcsUtcTimestamp(new Date())}`,
-    `DTSTART:${startIso}`,
-    `DTEND:${endIso}`,
+    `DTSTAMP:${toCompactUtc(new Date())}`,
+    `DTSTART:${toCompactUtc(start)}`,
+    `DTEND:${toCompactUtc(end)}`,
     `SUMMARY:${escapeIcsText(poll.title)}`,
     `DESCRIPTION:${escapeIcsText(poll.description || '')}`,
     `LOCATION:${escapeIcsText(poll.location || '')}`,

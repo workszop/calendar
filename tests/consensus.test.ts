@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { Poll } from '../src/types';
-import { analyzeSlot, findBestMeetingWindows, generateTimeSlots, isValidHourWindow } from '../src/utils/consensus';
+import {
+  analyzeSlot,
+  analyzeWindow,
+  findBestMeetingWindows,
+  findDateWithoutMeetingFit,
+  generateTimeSlots,
+  getWindowAttendance,
+  isValidHourWindow,
+  summarizeWindowAttendance,
+  timeToMinutes,
+} from '../src/utils/consensus';
+import { analyzeGridBlock } from '../src/utils/grid';
 
 const poll: Poll = {
   id: 'p1',
@@ -179,5 +190,92 @@ describe('isValidHourWindow', () => {
     expect(isValidHourWindow(9, 25)).toBe(false);
     expect(isValidHourWindow(9.25, 12)).toBe(false);
     expect(isValidHourWindow(Number.NaN, 12)).toBe(false);
+  });
+});
+
+describe('timeToMinutes', () => {
+  it('counts minutes after midnight, including the 24:00 end marker', () => {
+    expect(timeToMinutes('00:00')).toBe(0);
+    expect(timeToMinutes('09:30')).toBe(570);
+    expect(timeToMinutes('24:00')).toBe(1440);
+  });
+});
+
+describe('whole-window attendance', () => {
+  const day = '2026-10-01';
+  const answers = (...statuses: (string | undefined)[]) =>
+    Object.fromEntries(
+      statuses.flatMap((status, i) => (status ? [[`${day}T${generateTimeSlots(9, 12, 30)[i]}`, status]] : []))
+    ) as Record<string, 'preferred' | 'available' | 'if_needed' | 'unavailable'>;
+  const window3 = ['09:00', '09:30', '10:00'];
+
+  it('takes the weakest answer across every slot', () => {
+    expect(getWindowAttendance(answers('preferred', 'preferred', 'preferred'), day, window3)).toBe('preferred');
+    expect(getWindowAttendance(answers('preferred', 'available', 'preferred'), day, window3)).toBe('available');
+    expect(getWindowAttendance(answers('preferred', 'if_needed', 'available'), day, window3)).toBe('if_needed');
+    expect(getWindowAttendance(answers('if_needed', 'available', 'unavailable'), day, window3)).toBe('unavailable');
+  });
+
+  it('treats an unanswered slot or an empty window as unavailable', () => {
+    expect(getWindowAttendance(answers('preferred', undefined, 'preferred'), day, window3)).toBe('unavailable');
+    expect(getWindowAttendance(answers('preferred'), day, [])).toBe('unavailable');
+  });
+
+  it('groups names and scores preferred 3, available 2, if needed 1', () => {
+    const summary = summarizeWindowAttendance({
+      participants: [
+        { id: 'p', name: 'Pia', timezone: 'UTC', updatedAt: '', availability: answers('preferred', 'preferred') },
+        { id: 'a', name: 'Al', timezone: 'UTC', updatedAt: '', availability: answers('available', 'preferred') },
+        { id: 'i', name: 'Ida', timezone: 'UTC', updatedAt: '', availability: answers('if_needed', 'available') },
+        { id: 'b', name: 'Bo', timezone: 'UTC', updatedAt: '', availability: answers('available', 'unavailable') },
+      ],
+    }, day, ['09:00', '09:30']);
+    expect(summary).toEqual({
+      availableNames: ['Pia', 'Al'],
+      preferredNames: ['Pia'],
+      ifNeededNames: ['Ida'],
+      unavailableNames: ['Bo'],
+      score: 6,
+    });
+  });
+
+  it('feeds the slot, grid block and meeting window analyses from the same rule', () => {
+    const block = { date: day, startTime: '10:00', endTime: '11:00', slotTimes: ['10:00', '10:30'] };
+    expect(analyzeGridBlock(poll, block)).toEqual(analyzeWindow(poll, day, '10:00', ['10:00', '10:30']));
+    expect(analyzeSlot(poll, day, '11:00')).toEqual(analyzeWindow(poll, day, '11:00', ['11:00']));
+    const best = findBestMeetingWindows(poll).find((w) => w.startTime === '09:30')!;
+    const summary = summarizeWindowAttendance(poll, day, ['09:30', '10:00']);
+    expect(best.availableAttendees).toEqual(summary.availableNames);
+    expect(best.unavailableAttendees).toEqual(summary.unavailableNames);
+    expect(best.score).toBe(summary.score);
+  });
+});
+
+describe('findDateWithoutMeetingFit', () => {
+  const shape = {
+    durationMinutes: 60,
+    slotInterval: 30 as const,
+    startHour: 9,
+    endHour: 17,
+    proposedSlots: {
+      '2026-10-01': ['09:00', '09:30'],
+      '2026-10-02': ['09:00', '10:00', '11:00'],
+      '2026-10-03': ['13:30', '14:00', '15:00'],
+    },
+  };
+
+  it('returns the first date with no back-to-back run as long as the meeting', () => {
+    expect(findDateWithoutMeetingFit(shape, ['2026-10-01', '2026-10-02', '2026-10-03'])).toBe('2026-10-02');
+    expect(findDateWithoutMeetingFit(shape, ['2026-10-03', '2026-10-02'])).toBe('2026-10-02');
+  });
+
+  it('returns undefined when every date fits', () => {
+    expect(findDateWithoutMeetingFit(shape, ['2026-10-01', '2026-10-03'])).toBeUndefined();
+    expect(findDateWithoutMeetingFit({ ...shape, durationMinutes: 30 }, ['2026-10-02'])).toBeUndefined();
+    expect(findDateWithoutMeetingFit(poll, poll.dates)).toBeUndefined();
+  });
+
+  it('checks a meeting longer than an hour window', () => {
+    expect(findDateWithoutMeetingFit({ ...poll, durationMinutes: 240 }, poll.dates)).toBe('2026-10-01');
   });
 });

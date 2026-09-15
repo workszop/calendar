@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement as h } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AvailabilityPainter } from '../../src/components/AvailabilityPainter';
+import { TimeZoneNote } from '../../src/components/TimeZoneNote';
 import type { Poll } from '../../src/types';
 
 afterEach(() => {
@@ -419,5 +420,90 @@ describe('AvailabilityPainter display interval', () => {
     expect(block.dataset.status).toBe('available');
     fireEvent.keyDown(block, { key: ' ' });
     expect(block.dataset.status).toBe('none');
+  });
+
+  it('lets touch drags paint cells while the time column keeps native scrolling', () => {
+    renderPainter(makePoll(), 30);
+
+    expect(cell('09:00').style.touchAction).toBe('none');
+    const timeCell = [...document.querySelectorAll<HTMLElement>('[data-answer-table] tbody td')].find(
+      (element) => element.textContent === '9:00 AM'
+    );
+    expect(timeCell).toBeTruthy();
+    expect(timeCell!.style.touchAction).toBe('');
+  });
+
+  it('paints a vertical touch drag through the grid hit-testing', async () => {
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(makePoll(), 30, onSaveAvailability);
+    const table = document.querySelector<HTMLTableElement>('[data-answer-table] table');
+    expect(table).toBeTruthy();
+
+    const originalElementFromPoint = document.elementFromPoint;
+    const elementFromPoint = vi.fn<(x: number, y: number) => Element | null>();
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: elementFromPoint });
+    try {
+      fireEvent.pointerDown(cell('09:00'), { pointerId: 7, pointerType: 'touch', button: 0, clientX: 10, clientY: 10 });
+      // The label inside the cell is what a finger lands on.
+      elementFromPoint.mockReturnValue(cell('10:00').querySelector('span') ?? cell('10:00'));
+      fireEvent.pointerMove(table!, { pointerId: 7, pointerType: 'touch', clientX: 10, clientY: 90 });
+      expect(elementFromPoint).toHaveBeenCalledWith(10, 90);
+      expect(cell('09:30').dataset.status).toBe('available');
+      expect(cell('10:00').dataset.status).toBe('available');
+      fireEvent.pointerUp(window, { pointerId: 7, pointerType: 'touch' });
+    } finally {
+      Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: originalElementFromPoint });
+    }
+
+    await savePainter();
+    expect(onSaveAvailability.mock.calls[0]?.[2]).toEqual({
+      [key('09:00')]: 'available',
+      [key('09:30')]: 'available',
+      [key('10:00')]: 'available',
+    });
+  });
+
+  it('names the poll time zone on the answer grid', () => {
+    renderPainter(makePoll({ timezone: 'Europe/Warsaw' }), 30);
+
+    const grid = document.querySelector<HTMLElement>('[data-answer-grid]');
+    expect(grid?.dataset.pollTimezone).toBe('Europe/Warsaw');
+    expect(grid?.querySelector('[data-timezone-note]')?.textContent).toContain('Times in Europe/Warsaw');
+  });
+
+  it('aligns an hourly view across days that start on different half-hours', async () => {
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(
+      makePoll({
+        dates: ['2026-10-01', '2026-10-02'],
+        proposedSlots: { '2026-10-01': ['09:00', '09:30'], '2026-10-02': ['09:30', '10:00', '10:30'] },
+      }),
+      60,
+      onSaveAvailability
+    );
+
+    const rows = [...document.querySelectorAll('[data-answer-table] tbody tr')];
+    expect(rows.map((row) => row.querySelector('td')?.textContent)).toEqual(['9:00 AM', '10:00 AM']);
+    expect(rows[0].querySelectorAll('[data-slot-key]')).toHaveLength(2);
+    const partial = cell('09:00', '2026-10-02');
+    expect(partial.dataset.coveredSlots).toBe('09:30');
+    expect(partial.getAttribute('aria-label')).toMatch(/9:30 AM.*10:00 AM/);
+
+    finishPointerStroke(partial);
+    await savePainter();
+    expect(onSaveAvailability.mock.calls[0]?.[2]).toEqual({ [key('09:30', '2026-10-02')]: 'available' });
+  });
+});
+
+describe('TimeZoneNote', () => {
+  it('adds the offset hint only for a viewer in another zone', () => {
+    const summer = new Date('2026-07-01T12:00:00Z');
+    const { rerender } = render(h(TimeZoneNote, { timeZone: 'Europe/Warsaw', viewerTimeZone: 'Europe/Warsaw', now: summer }));
+    expect(document.querySelector('[data-timezone-note]')?.textContent).toBe('Times in Europe/Warsaw');
+
+    rerender(h(TimeZoneNote, { timeZone: 'Europe/Warsaw', viewerTimeZone: 'America/Chicago', now: summer }));
+    expect(document.querySelector('[data-timezone-note]')?.textContent).toBe(
+      'Times in Europe/Warsaw (your time is 7 h earlier)'
+    );
   });
 });

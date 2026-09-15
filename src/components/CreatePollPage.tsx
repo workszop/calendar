@@ -99,7 +99,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
     event.preventDefault();
     if (isSubmitting || submitGuardRef.current) return;
 
-    const validation = validateCreatePoll({ title, draft }, todayStr);
+    const validation = validateCreatePoll({ title, draft, durationMinutes }, todayStr);
     // Keep only future dates in the draft before either displaying errors or
     // constructing the payload. setDates preserves every existing proposal.
     draft.setDates(validation.dates);
@@ -239,7 +239,11 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                         aria-pressed={durationMinutes === minutes}
                         aria-label={`${minutes} minutes`}
                         disabled={isSubmitting}
-                        onClick={() => form.setDurationMinutes(minutes)}
+                        onClick={() => {
+                          form.setDurationMinutes(minutes);
+                          // A shorter meeting can resolve a meeting-length error.
+                          clearError('hours');
+                        }}
                       >
                         {minutes} min
                       </button>

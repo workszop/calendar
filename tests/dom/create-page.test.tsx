@@ -194,6 +194,45 @@ describe('CreatePollPage', () => {
     expect(onCreatePoll).not.toHaveBeenCalled();
   });
 
+  it('rejects a day whose proposed times cannot hold the meeting length and focuses the hours', () => {
+    const { onCreatePoll } = renderPage();
+    fireEvent.change(screen.getByLabelText(/Meeting name/), { target: { value: 'Planning session' } });
+    const [day1, day2] = chooseNextThreeDates();
+    fillSelectedDays();
+    clearDay(day2);
+    // Two separate half-hours never hold a 60-minute meeting.
+    fireEvent.click(proposalCell(day2, '09:00'));
+    fireEvent.click(proposalCell(day2, '11:00'));
+    expect(proposalCell(day2, '09:00').dataset.selected).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create poll' }));
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('propose at least 60 minutes of back-to-back times.');
+    expect(alert.textContent).not.toContain(day1);
+    expect(document.activeElement?.id).toBe('create-page-start-hour');
+    expect(onCreatePoll).not.toHaveBeenCalled();
+  });
+
+  it('accepts short runs once the meeting length fits them', async () => {
+    const { onCreatePoll } = renderPage();
+    fireEvent.change(screen.getByLabelText(/Meeting name/), { target: { value: 'Planning session' } });
+    fireEvent.click(screen.getByRole('button', { name: '90 minutes' }));
+    const [, day2] = chooseNextThreeDates();
+    fillSelectedDays();
+    clearDay(day2);
+    fireEvent.click(proposalCell(day2, '09:00'));
+    fireEvent.click(proposalCell(day2, '09:30'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create poll' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/at least 90 minutes/);
+
+    fireEvent.click(screen.getByRole('button', { name: '60 minutes' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create poll' }));
+    await waitFor(() => expect(onCreatePoll).toHaveBeenCalledTimes(1));
+  });
+
   it('preserves sparse proposals after a failed create and retries the same draft', async () => {
     const onCreatePoll = vi
       .fn()
