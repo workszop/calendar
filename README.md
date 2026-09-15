@@ -26,6 +26,8 @@ For the local user service, run `systemctl --user restart cal-synch.service`
 after `npm run build`. This preserves the poll data file.
 
 Environment: `PORT` (default 3000), `POLLS_DATA_FILE` (default `data/polls.json`).
+The local server keeps all polls in that one JSON array file behind the same
+per-poll store interface as Netlify, with an in-process write queue.
 
 ## Netlify
 
@@ -33,16 +35,24 @@ Connect the GitHub repository to Netlify and deploy `main`. The checked-in
 configuration builds the frontend, publishes `dist/`, and routes `/api/*` to the
 Netlify Function. Uploading only the static build with Netlify Drop is not enough.
 
-Meetings persist in the site's **Blobs** store named `calendar-polls`, under the
-`polls` key. The native function runtime supplies storage credentials; no separate
-database account or frontend API key is needed. Production data survives new
-deploys. Preview and branch deploys use separate, deploy-specific store names.
+Meetings persist in the site's **Blobs** store named `calendar-polls`, one blob
+per poll under `poll/<id>`. The native function runtime supplies storage
+credentials; no separate database account or frontend API key is needed.
+Production data survives new deploys. Preview and branch deploys use separate,
+deploy-specific store names.
 
-Cloud writes use ETag checks and retry known conflicts, so separate function
-instances cannot silently overwrite concurrent updates. If contention persists,
-the API returns a retryable error instead of claiming a successful save. This
-shared JSON-array store is intended for small trusted groups, not a high-volume
-database. Netlify Functions and Blobs usage is subject to your account's limits.
+Every write is a read-modify-write of that one poll with an ETag check, so a
+save to one poll never conflicts with a save to another, and separate function
+instances cannot silently overwrite concurrent updates to the same poll. A lost
+race is retried (up to 10 attempts with jittered exponential backoff); if
+contention still persists, the API answers `409` with `retryable: true` instead
+of claiming a successful save. Netlify Functions and Blobs usage is subject to
+your account's limits.
+
+Earlier versions kept every poll in one `polls` array blob. The daily cleanup
+moves the polls worth keeping into per-poll blobs and deletes that array; until
+it has run once, older polls are not visible. Use "Run now" on the
+`cleanup-polls` function right after the first deploy of this layout.
 
 After deploying, `/api/health` must return JSON with `status: "ok"` and
 `/api/polls` must return a JSON array (empty without `?ids=`), not an HTML page or 404. Local commands
@@ -99,8 +109,9 @@ through 15 October). Expired polls disappear from the API immediately and are
 removed from storage on the next save. A daily sweep also deletes them: the
 `cleanup-polls` scheduled function on Netlify (production deploys only; use
 "Run now" on the Functions page to trigger it), and a startup plus 24-hour
-timer on the local server. Creating a poll that is already past that window
-is rejected. The window is `RETENTION_DAYS` in `server/retention.ts`.
+timer on the local server. A save aimed at an expired poll deletes it and
+answers 404. Creating a poll that is already past that window is rejected. The
+window is `RETENTION_DAYS` in `server/retention.ts`.
 
 ## Grid view
 
@@ -109,8 +120,6 @@ remembered in this browser and changes only the display, not meeting duration
 or existing answers. Hourly painting applies to all underlying half-hour slots;
 cells show **Mixed** when those answers differ. Short final blocks remain visible.
 The group heatmap counts someone as available only for an entire displayed block.
-
-## Deployment limits
 
 ## Access codes
 
@@ -121,10 +130,39 @@ Locking a time, re-opening voting, adding dates, removing responses and deleting
 the poll require that code (`X-Organizer-Code` header); anyone else can enter it
 under **Manage poll** to unlock those tools. Each saved response gets an **edit
 code** kept in the answering browser (`X-Edit-Code`); a response cannot be changed
-without it, and typing an existing name creates a new response. Codes cannot be
+without it, and typing an existing name creates a new response. A browser may
+send its own edit code (32-128 URL-safe characters) with a first save, so a
+retried save updates the same response instead of adding a duplicate. Codes cannot be
 recovered: the server stores only their SHA-256 hashes. Emails are returned only
 to the organizer. There is no public poll list: the home page shows polls this
 browser created or answered. Polls stored before access codes existed are removed.
+
+## Limits and rate limiting
+
+Input limits live in `src/utils/limits.ts` and are enforced by the API: at most
+60 dates per poll, 200 responses, one year ahead, 5760 availability entries per
+response (60 dates of 15-minute slots), a 256 kB request body, and about 1 MB
+per stored poll (compact JSON). A save that would grow a poll past 1 MB is
+refused with `413` and a message; nothing is written. There is no cap on the
+number of polls. Every date of a new poll, and every added date, must contain a
+back-to-back run of proposed times at least as long as the meeting (`400`).
+
+Mutating requests are rate limited per client IP, in memory: 10 new polls per
+hour and 120 other writes (answers, locking, adding dates, deletes) per
+10 minutes. Reads are not limited. Over the limit the API answers `429` with
+`{ "error": ... }` and a `Retry-After` header in seconds. Locally the client IP
+is Express's `req.ip` (`X-Forwarded-For` is not trusted); on Netlify it is
+`x-nf-client-connection-ip`. `createApi(store, { rateLimit })` accepts other
+limits, a shared limiter, or `false`.
+
+The in-memory counters are per process, so on Netlify each warm function
+instance counts separately. The function therefore also declares a platform
+rate limit (`export const config = { rateLimit }` in `netlify/functions/api.ts`):
+300 requests per minute per IP, across all methods, enforced by Netlify before
+the function runs.
+
+Voting closes when a time is locked: new answers and edits get `409` until the
+organizer re-opens voting; the organizer can still remove responses.
 
 ## Deployment limits
 

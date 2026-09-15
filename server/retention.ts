@@ -32,40 +32,56 @@ export function isLegacyPoll(poll: Poll): boolean {
   return typeof poll.organizerCodeHash !== "string" || !poll.organizerCodeHash;
 }
 
-/** Removes expired and legacy polls from the array in place; returns how many were removed. */
-export function pruneExpiredPolls(polls: Poll[], now: Date): number {
-  const before = polls.length;
-  const kept = polls.filter((poll) => !isPollExpired(poll, now) && !isLegacyPoll(poll));
-  polls.splice(0, polls.length, ...kept);
-  return before - kept.length;
+/** Whether retention removes this poll at `now`. */
+export function isPollRetired(poll: Poll, now: Date): boolean {
+  return isPollExpired(poll, now) || isLegacyPoll(poll);
 }
 
 /**
- * Wraps a store so expired polls are invisible to every read and physically
- * removed by the next write. A mutation whose own result is null still skips
- * the write; the scheduled cleanup covers stores nobody writes to.
+ * Wraps a store so retired polls are invisible to every read. A write aimed at
+ * a retired poll deletes it instead and reports it missing; the scheduled
+ * cleanup covers polls nobody touches.
  */
 export function withRetention(store: PollStore, clock: Clock = () => new Date()): PollStore {
+  const visible = (poll: Poll | null) => (poll && !isPollRetired(poll, clock()) ? poll : null);
   return {
-    async load() {
-      const polls = await store.load();
-      pruneExpiredPolls(polls, clock());
-      return polls;
+    async get(id) {
+      return visible(await store.get(id));
     },
-    mutate(fn) {
-      return store.mutate((polls) => {
-        pruneExpiredPolls(polls, clock());
-        return fn(polls);
+    async getMany(ids) {
+      return (await store.getMany(ids)).filter((poll) => visible(poll));
+    },
+    create: (poll) => store.create(poll),
+    async update(id, fn) {
+      let retired = false;
+      const result = await store.update(id, (draft) => {
+        // May run again after a CAS conflict.
+        retired = isPollRetired(draft, clock());
+        return retired ? null : fn(draft);
       });
+      if (retired) await store.delete(id);
+      return result;
     },
+    delete: (id) => store.delete(id),
+    listIds: () => store.listIds(),
   };
 }
 
-/** Deletes expired polls now. Writes only when something was removed. */
+/**
+ * Deletes retired polls now: imports any old-layout records worth keeping,
+ * then sweeps every stored poll. Resolves with how many polls were removed.
+ */
 export async function cleanupExpiredPolls(store: PollStore, clock: Clock = () => new Date()): Promise<number> {
-  const removed = await store.mutate((polls) => {
-    const count = pruneExpiredPolls(polls, clock());
-    return count > 0 ? count : null;
-  });
-  return removed ?? 0;
+  let removed = 0;
+  if (store.importLegacyPolls) {
+    removed += (await store.importLegacyPolls((poll) => !isPollRetired(poll, clock()))).dropped;
+  }
+  for (const id of await store.listIds()) {
+    const poll = await store.get(id);
+    if (poll && isPollRetired(poll, clock())) {
+      await store.delete(id);
+      removed += 1;
+    }
+  }
+  return removed;
 }

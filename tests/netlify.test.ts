@@ -112,8 +112,11 @@ describe('Netlify deployment contract', () => {
     });
     const list = await invoke('GET', `/api/polls?ids=${poll.id}`);
     expect(await list.json()).toEqual([expect.objectContaining({ id: poll.id, participantsCount: 1 })]);
-    const durable = await getStore({ name: 'calendar-polls', consistency: 'strong' }).get('polls', { type: 'json' });
-    expect(durable).toEqual([expect.objectContaining({ id: poll.id, participants: [expect.objectContaining({ name: 'Test participant' })] })]);
+    const store = getStore({ name: 'calendar-polls', consistency: 'strong' });
+    const durable = await store.get(`poll/${poll.id}`, { type: 'json' });
+    expect(durable).toEqual(expect.objectContaining({ id: poll.id, participants: [expect.objectContaining({ name: 'Test participant' })] }));
+    expect((await store.list({ prefix: 'poll/' })).blobs.map((blob) => blob.key)).toEqual([`poll/${poll.id}`]);
+    expect(await store.get('polls')).toBeNull();
   });
 
   it('passes organizer codes through the deployed function', async () => {
@@ -151,6 +154,21 @@ describe('Netlify deployment contract', () => {
     expect(response.headers.get('cache-control')).toContain('no-store');
   });
 
+  it('rate-limits poll creation per Netlify client IP and declares a platform rate limit', async () => {
+    const { config } = await import(/* @vite-ignore */ FUNCTION_FILE);
+    expect(config.rateLimit).toEqual({ windowLimit: 300, windowSize: 60, aggregateBy: ['ip', 'domain'] });
+
+    const body = { title: 'Limited', dates: [FUTURE_DATE] };
+    const from = (ip: string, spoof = '198.51.100.99') =>
+      invoke('POST', '/api/polls', body, { 'x-nf-client-connection-ip': ip, 'X-Forwarded-For': spoof });
+    for (let i = 0; i < 10; i++) expect((await from('203.0.113.7', `198.51.100.${i}`)).status).toBe(201);
+    const blocked = await from('203.0.113.7');
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await blocked.json()).toEqual({ error: expect.any(String) });
+    expect((await from('203.0.113.8')).status).toBe(201);
+  });
+
   it('runs a daily scheduled cleanup that deletes expired polls from Blobs', async () => {
     const cleanupFile = path.resolve('netlify/functions/cleanup-polls.ts');
     const { default: cleanup, config } = await import(/* @vite-ignore */ cleanupFile);
@@ -160,17 +178,22 @@ describe('Netlify deployment contract', () => {
     const base = { description: '', durationMinutes: 30, timezone: 'UTC', startHour: 9, endHour: 10,
       slotInterval: 30, creatorName: 'Ada', createdAt: '', finalizedSlot: null, participants: [],
       organizerCodeHash: 'a'.repeat(64) };
+    // The old layout: one array blob holding every poll.
     await store.setJSON('polls', [
-      { ...base, id: 'expired', title: 'Expired', dates: ['2020-01-01'] },
-      { ...base, id: 'kept', title: 'Kept', dates: ['2099-10-01'] },
+      { ...base, id: 'legacy_expired', title: 'Expired', dates: ['2020-01-01'] },
+      { ...base, id: 'legacy_kept', title: 'Kept', dates: ['2099-10-01'] },
+      { ...base, id: 'legacy_ownerless', title: 'No owner', dates: ['2099-10-01'], organizerCodeHash: undefined },
     ]);
+    await store.setJSON('poll/expired', { ...base, id: 'expired', title: 'Expired', dates: ['2020-01-01'] });
+    await store.setJSON('poll/kept', { ...base, id: 'kept', title: 'Kept', dates: ['2099-10-01'] });
     vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const response = await cleanup(new Request('https://calendar.example/.netlify/functions/cleanup-polls', {
       method: 'POST', body: JSON.stringify({ next_run: '2099-01-01T00:00:00Z' }),
     }));
     expect(response.status).toBe(204);
-    const durable = await store.get('polls', { type: 'json' });
-    expect(durable.map((p: { id: string }) => p.id)).toEqual(['kept']);
+    expect(await store.get('polls')).toBeNull();
+    const { blobs } = await store.list({ prefix: 'poll/' });
+    expect(blobs.map((blob) => blob.key).sort()).toEqual(['poll/kept', 'poll/legacy_kept']);
   });
 });

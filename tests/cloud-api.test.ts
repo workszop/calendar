@@ -2,52 +2,10 @@ import type { Server } from "http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBlobPollStore } from "../server/blob-store";
 import { createApi } from "../server/api";
+import { MemoryBlobClient } from "./memory-blob-client";
 
 // A date inside the API's one-year window, whenever the suite runs.
 const FUTURE_DATE = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
-
-class MemoryBlobClient {
-  data: unknown = undefined;
-  exists = false;
-  version = 0;
-  readError: Error | undefined;
-  holdInitialReads = false;
-  commitThenReportConflict = false;
-  private readonly pendingInitialReads: Array<(value: null) => void> = [];
-
-  private etag() {
-    return `etag-${this.version}`;
-  }
-
-  async getWithMetadata() {
-    if (this.readError) throw this.readError;
-    if (!this.exists) {
-      if (this.holdInitialReads && this.pendingInitialReads.length < 2) {
-        return new Promise<null>((resolve) => {
-          this.pendingInitialReads.push(resolve);
-          if (this.pendingInitialReads.length === 2) {
-            for (const release of this.pendingInitialReads.splice(0)) release(null);
-          }
-        });
-      }
-      return null;
-    }
-    return { data: structuredClone(this.data), etag: this.etag(), metadata: {} };
-  }
-
-  async setJSON(_key: string, data: unknown, options?: { onlyIfMatch?: string; onlyIfNew?: boolean }) {
-    if (options?.onlyIfNew && this.exists) return { modified: false };
-    if (options?.onlyIfMatch && (!this.exists || options.onlyIfMatch !== this.etag())) return { modified: false };
-    this.exists = true;
-    this.data = structuredClone(data);
-    this.version += 1;
-    if (this.commitThenReportConflict) {
-      this.commitThenReportConflict = false;
-      return { modified: false };
-    }
-    return { modified: true, etag: this.etag() };
-  }
-}
 
 const start = async (app: ReturnType<typeof createApi>) => {
   const server = await new Promise<Server>((resolve, reject) => {
@@ -95,7 +53,6 @@ afterEach(async () => {
 describe("cloud PollStore API", () => {
   it("keeps concurrent creates from two independent API clients", async () => {
     const client = new MemoryBlobClient();
-    client.holdInitialReads = true;
     const first = await start(createApi(createBlobPollStore(client)));
     const second = await start(createApi(createBlobPollStore(client)));
     openServers.push(first.server, second.server);
@@ -112,6 +69,49 @@ describe("cloud PollStore API", () => {
     expect(listed.json.map((poll: { title: string }) => poll.title).sort()).toEqual(["First", "Second"]);
   });
 
+  it("keeps concurrent answers to one poll from many API instances", async () => {
+    const client = new MemoryBlobClient();
+    const apis = await Promise.all(Array.from({ length: 4 }, () => start(createApi(createBlobPollStore(client)))));
+    openServers.push(...apis.map((api) => api.server));
+    const created = await request(apis[0].base, "POST", "/api/polls", createBody("Busy"));
+    const pollId = created.json.id as string;
+
+    const saves = await Promise.all(Array.from({ length: 12 }, (_, i) =>
+      request(apis[i % apis.length].base, "POST", `/api/polls/${pollId}/respond`, {
+        name: `Person ${i}`,
+        availability: { [`${FUTURE_DATE}T09:00`]: "available" },
+      })
+    ));
+    expect(saves.map((save) => save.response.status)).toEqual(Array(12).fill(200));
+    const reloaded = await request(apis[0].base, "GET", `/api/polls/${pollId}`);
+    expect(reloaded.json.participants).toHaveLength(12);
+    expect(client.keys()).toEqual([`poll/${pollId}`]);
+  });
+
+  it("answers persistent contention with a retryable 409, and other 409s without the flag", async () => {
+    const client = new MemoryBlobClient();
+    const api = await start(createApi(createBlobPollStore(client, { maxAttempts: 2, backoffMs: 1 })));
+    openServers.push(api.server);
+    const created = await request(api.base, "POST", "/api/polls", createBody("Contended"));
+    const pollId = created.json.id as string;
+    const organizer = { "X-Organizer-Code": created.json.organizerCode as string };
+
+    client.conflictsRemaining = 10;
+    const contended = await request(api.base, "POST", `/api/polls/${pollId}/respond`, { name: "Ada", availability: {} });
+    expect(contended.response.status).toBe(409);
+    expect(contended.json).toEqual({ error: expect.any(String), retryable: true });
+
+    client.conflictsRemaining = 0;
+    await request(api.base, "POST", `/api/polls/${pollId}/finalize`, {
+      date: FUTURE_DATE, startTime: "09:00", endTime: "09:30",
+    }, organizer);
+    const locked = await request(api.base, "POST", `/api/polls/${pollId}/finalize`, {
+      date: FUTURE_DATE, startTime: "10:00", endTime: "10:30",
+    }, organizer);
+    expect(locked.response.status).toBe(409);
+    expect(locked.json.retryable).toBeUndefined();
+  });
+
   it("does not duplicate a create when a committed CAS write reports a conflict", async () => {
     const client = new MemoryBlobClient();
     client.commitThenReportConflict = true;
@@ -123,6 +123,22 @@ describe("cloud PollStore API", () => {
     const listed = await request(api.base, "GET", `/api/polls?ids=${created.json.id}`);
     expect(listed.json).toHaveLength(1);
     expect(listed.json[0].title).toBe("Exactly once");
+  });
+
+  it("does not duplicate a first answer when a committed CAS write reports a conflict", async () => {
+    const client = new MemoryBlobClient();
+    const api = await start(createApi(createBlobPollStore(client)));
+    openServers.push(api.server);
+    const created = await request(api.base, "POST", "/api/polls", createBody("Answered once"));
+    const pollId = created.json.id as string;
+
+    client.commitThenReportConflict = true;
+    const saved = await request(api.base, "POST", `/api/polls/${pollId}/respond`, { name: "Ada", availability: {} });
+    expect(saved.response.status).toBe(200);
+    expect(saved.json.poll.participants).toHaveLength(1);
+    expect(saved.json.editCode).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const stored = client.peek(`poll/${pollId}`) as { participants: unknown[] };
+    expect(stored.participants).toHaveLength(1);
   });
 
   it("supports the full lifecycle through a blob-backed API", async () => {

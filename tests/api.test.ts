@@ -4,6 +4,8 @@ import os from 'os';
 import path from 'path';
 import type { Server } from 'http';
 import { createApi } from '../server/api';
+import { createRateLimiter, DEFAULT_RATE_LIMITS } from '../server/rate-limit';
+import { MAX_AVAILABILITY_ENTRIES, MAX_POLL_BYTES } from '../src/utils/limits';
 
 // ─── Fixture: a real HTTP server backed by a throwaway data file ───
 let server: Server;
@@ -12,8 +14,12 @@ let tmpDir: string;
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-'));
-  // Pinned clock: fixture dates must not expire as real time passes.
-  const app = createApi(path.join(tmpDir, 'polls.json'), { clock: () => new Date('2026-09-13T12:00:00Z') });
+  // Pinned clock: fixture dates must not expire as real time passes. The suite
+  // creates far more polls than one visitor may; rate limits have their own tests.
+  const app = createApi(path.join(tmpDir, 'polls.json'), {
+    clock: () => new Date('2026-09-13T12:00:00Z'),
+    rateLimit: false,
+  });
   await new Promise<void>((resolve, reject) => {
     server = app.listen(0, '127.0.0.1', () => {
       const addr = server.address();
@@ -702,7 +708,7 @@ describe('poll API retention', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-retention-'));
     const file = path.join(dir, 'polls.json');
     let now = new Date('2026-09-13T12:00:00Z');
-    const app = createApi(file, { clock: () => now });
+    const app = createApi(file, { clock: () => now, rateLimit: false });
     const local = await new Promise<Server>((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
@@ -727,9 +733,11 @@ describe('poll API retention', () => {
       now = new Date('2026-10-05T00:00:00Z'); // 15th day: gone from reads
       expect((await call('GET', `/api/polls/${short.id}`)).status).toBe(404);
       expect((await call('GET', `/api/polls?ids=${short.id},${long.id}`)).json.map((p: { id: string }) => p.id)).toEqual([long.id]);
-      // Reads never write; the next write removes it from disk.
+      // Reads and writes to other polls leave it alone; a write aimed at it removes it.
       expect(fs.readFileSync(file, 'utf-8')).toContain(short.id);
       await call('POST', `/api/polls/${long.id}/respond`, { name: 'Ivy', availability: {} });
+      expect(fs.readFileSync(file, 'utf-8')).toContain(short.id);
+      expect((await call('POST', `/api/polls/${short.id}/respond`, { name: 'Ivy', availability: {} })).status).toBe(404);
       expect(fs.readFileSync(file, 'utf-8')).not.toContain(short.id);
     } finally {
       await new Promise<void>((resolve) => local.close(() => resolve()));
@@ -928,7 +936,284 @@ describe('poll API authorization', () => {
     fs.writeFileSync(file, JSON.stringify(polls, null, 2), 'utf-8');
 
     expect((await api('GET', '/api/polls/poll_legacy')).status).toBe(404);
-    await create(); // any write prunes it from disk
+    // A write aimed at it deletes it; the daily sweep covers untouched ones.
+    expect((await api('POST', '/api/polls/poll_legacy/respond', { name: 'Late', availability: {} })).status).toBe(404);
     expect(fs.readFileSync(file, 'utf-8')).not.toContain('poll_legacy');
+  });
+});
+
+// ─── Responses: idempotent first saves, stored fields, locked voting ───
+describe('poll API responses', () => {
+  const clientCode = (seed: string) => seed.repeat(40).slice(0, 40);
+
+  it('uses unguessable base64url ids for polls and participants', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Ids', dates: ['2026-10-01'] })).json;
+    expect(poll.id).toMatch(/^poll_[A-Za-z0-9_-]{22}$/);
+    const saved = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Ida', availability: {} });
+    expect(saved.json.participant.id).toMatch(/^part_[A-Za-z0-9_-]{22}$/);
+  });
+
+  it('makes a first save with a client edit code idempotent when the request is replayed', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Replay', dates: ['2026-10-01'] })).json;
+    const code = clientCode('Ab9_-');
+    const save = (availability: Record<string, string>) => api(
+      'POST', `/api/polls/${poll.id}/respond`, { name: 'Rex', availability }, { headers: { 'X-Edit-Code': code } }
+    );
+
+    const first = await save({ '2026-10-01T09:00': 'available' });
+    expect(first.status).toBe(200);
+    expect(first.json.editCode).toBe(code);
+    const replay = await save({ '2026-10-01T09:00': 'preferred' });
+    expect(replay.status).toBe(200);
+    expect(replay.json.editCode).toBe(code);
+    expect(replay.json.participant.id).toBe(first.json.participant.id);
+    expect(replay.json.poll.participants).toHaveLength(1);
+    expect(replay.json.participant.availability['2026-10-01T09:00']).toBe('preferred');
+
+    // The client code then works for normal updates.
+    const update = await api('POST', `/api/polls/${poll.id}/respond`,
+      { name: 'Rex', participantId: first.json.participant.id, availability: {} }, { headers: { 'X-Edit-Code': code } });
+    expect(update.status).toBe(200);
+    expect(update.json.editCode).toBeUndefined();
+  });
+
+  it('keeps concurrent replays of one first save to a single response', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Burst', dates: ['2026-10-01'] })).json;
+    const code = clientCode('burst');
+    const saves = await Promise.all(Array.from({ length: 6 }, () => api(
+      'POST', `/api/polls/${poll.id}/respond`, { name: 'Bea', availability: {} }, { headers: { 'X-Edit-Code': code } }
+    )));
+    expect(saves.every((save) => save.status === 200)).toBe(true);
+    expect((await api('GET', `/api/polls/${poll.id}`)).json.participants).toHaveLength(1);
+  });
+
+  it.each([
+    ['too short', 'a'.repeat(31)],
+    ['too long', 'a'.repeat(129)],
+    ['bad characters', `${'a'.repeat(32)}!`],
+  ])('rejects a client edit code that is %s', async (_label, code) => {
+    const poll = (await api('POST', '/api/polls', { title: 'Codes', dates: ['2026-10-01'] })).json;
+    const res = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Cy', availability: {} }, { headers: { 'X-Edit-Code': code } });
+    expect(res.status).toBe(400);
+    expect(res.json.error).toMatch(/X-Edit-Code/);
+    expect((await api('GET', `/api/polls/${poll.id}`)).json.participants).toHaveLength(0);
+  });
+
+  it('keeps the stored email and timezone when an update leaves them out', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Fields', dates: ['2026-10-01'], timezone: 'UTC' })).json;
+    const first = await api('POST', `/api/polls/${poll.id}/respond`, {
+      name: 'Eli', email: 'eli@example.com', timezone: 'Europe/Warsaw', availability: {},
+    });
+    const participantId = first.json.participant.id;
+    const update = (body: Record<string, unknown>) => api('POST', `/api/polls/${poll.id}/respond`,
+      { name: 'Eli', participantId, availability: {}, ...body }, { headers: { 'X-Edit-Code': first.json.editCode } });
+    const stored = async () => (await api('GET', `/api/polls/${poll.id}`)).json.participants[0];
+
+    expect((await update({})).status).toBe(200);
+    expect(await stored()).toMatchObject({ email: 'eli@example.com', timezone: 'Europe/Warsaw' });
+
+    await update({ email: 'new@example.com', timezone: 'America/New_York' });
+    expect(await stored()).toMatchObject({ email: 'new@example.com', timezone: 'America/New_York' });
+
+    // An explicit empty email clears it.
+    await update({ email: '' });
+    const cleared = await stored();
+    expect(cleared.email).toBeUndefined();
+    expect(cleared.timezone).toBe('America/New_York');
+  });
+
+  it('closes voting once a time is locked, but the organizer can still remove a response', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Closed', dates: ['2026-10-01'] })).json;
+    const saved = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Gil', availability: {} });
+    await api('POST', `/api/polls/${poll.id}/finalize`, { date: '2026-10-01', startTime: '09:00', endTime: '09:30' });
+
+    const closed = 'Voting is closed. The organizer must re-open voting before answers can change.';
+    const fresh = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Late', availability: {} });
+    expect(fresh.status).toBe(409);
+    expect(fresh.json).toEqual({ error: closed });
+    const update = await api('POST', `/api/polls/${poll.id}/respond`,
+      { name: 'Gil', participantId: saved.json.participant.id, availability: {} },
+      { headers: { 'X-Edit-Code': saved.json.editCode } });
+    expect(update.status).toBe(409);
+    const byOrganizer = await api('POST', `/api/polls/${poll.id}/respond`,
+      { name: 'Gil', participantId: saved.json.participant.id, availability: {} },
+      { headers: { 'X-Organizer-Code': poll.organizerCode } });
+    expect(byOrganizer.status).toBe(409);
+
+    const removed = await api('DELETE', `/api/polls/${poll.id}/respond/${saved.json.participant.id}`);
+    expect(removed.status).toBe(200);
+    expect(removed.json.participants).toEqual([]);
+  });
+
+  it('caps availability entries per response', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Cap', dates: ['2026-10-01'] })).json;
+    const availability = Object.fromEntries(Array.from({ length: MAX_AVAILABILITY_ENTRIES + 1 }, (_, i) => {
+      const day = new Date(Date.UTC(2026, 9, 1) + i * 15 * 60_000);
+      return [day.toISOString().slice(0, 16), 'available'];
+    }));
+    const res = await api('POST', `/api/polls/${poll.id}/respond`, { name: 'Max', availability });
+    expect(res.status).toBe(400);
+    expect(res.json.error).toBe(`availability may list at most ${MAX_AVAILABILITY_ENTRIES} slots.`);
+  });
+
+  it('refuses a save that would grow one stored poll past the size limit', async () => {
+    const poll = (await api('POST', '/api/polls', { title: 'Heavy', dates: ['2026-10-01'] })).json;
+    const file = path.join(tmpDir, 'polls.json');
+    const polls = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const stored = polls.find((p: { id: string }) => p.id === poll.id);
+    stored.description = 'x'.repeat(MAX_POLL_BYTES - 1000);
+    fs.writeFileSync(file, JSON.stringify(polls, null, 2), 'utf-8');
+
+    const res = await api('POST', `/api/polls/${poll.id}/respond`, {
+      name: 'Heavy', email: 'e'.repeat(160), timezone: 't'.repeat(64),
+      availability: Object.fromEntries(Array.from({ length: 16 }, (_, i) =>
+        [`2026-10-01T${String(9 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`, 'available'])),
+    });
+    expect(res.status).toBe(413);
+    expect(res.json.error).toMatch(/storage limit of 1 MB/);
+    expect((await api('GET', `/api/polls/${poll.id}`)).json.participants).toHaveLength(0);
+  });
+});
+
+// ─── Meeting-length fit ───
+describe('poll API meeting-length fit', () => {
+  it('rejects a created poll whose date has no back-to-back run long enough for the meeting', async () => {
+    const gaps = await api('POST', '/api/polls', {
+      title: 'Gappy', dates: ['2026-10-01', '2026-10-02'], durationMinutes: 60,
+      proposedSlots: { '2026-10-01': ['09:00', '09:30'], '2026-10-02': ['09:00', '10:00'] },
+    });
+    expect(gaps.status).toBe(400);
+    expect(gaps.json.error).toBe('2026-10-02 has no 60-minute run of proposed times.');
+
+    const shortDay = await api('POST', '/api/polls', {
+      title: 'Short day', dates: ['2026-10-01'], durationMinutes: 90, startHour: 9, endHour: 10,
+    });
+    expect(shortDay.status).toBe(400);
+    expect(shortDay.json.error).toBe('2026-10-01 has no 90-minute run of proposed times.');
+
+    const fits = await api('POST', '/api/polls', {
+      title: 'Fits', dates: ['2026-10-01'], durationMinutes: 60,
+      proposedSlots: { '2026-10-01': ['09:00', '11:00', '11:30'] },
+    });
+    expect(fits.status).toBe(201);
+  });
+
+  it('checks only the new dates when adding dates', async () => {
+    const poll = (await api('POST', '/api/polls', {
+      title: 'Extend fit', dates: ['2026-10-01'], durationMinutes: 60, startHour: 9, endHour: 11,
+    })).json;
+    const tooShort = await api('POST', `/api/polls/${poll.id}/dates`, {
+      dates: ['2026-10-02', '2026-10-03'],
+      proposedSlots: { '2026-10-02': ['09:00', '09:30'], '2026-10-03': ['14:00'] },
+    });
+    expect(tooShort.status).toBe(400);
+    expect(tooShort.json.error).toBe('2026-10-03 has no 60-minute run of proposed times.');
+    expect((await api('GET', `/api/polls/${poll.id}`)).json.dates).toEqual(['2026-10-01']);
+
+    const ok = await api('POST', `/api/polls/${poll.id}/dates`, {
+      dates: ['2026-10-02'], proposedSlots: { '2026-10-02': ['14:00', '14:30'] },
+    });
+    expect(ok.status).toBe(200);
+  });
+});
+
+// ─── Rate limits ───
+describe('poll API rate limits', () => {
+  const serve = async (options: Parameters<typeof createApi>[1]) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cal-synch-limits-'));
+    const app = createApi(path.join(dir, 'polls.json'), { clock: () => new Date('2026-09-13T12:00:00Z'), ...options });
+    const local = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const addr = local.address();
+    const root = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
+    const call = async (method: string, url: string, body?: unknown, headers: Record<string, string> = {}) => {
+      const res = await fetch(root + url, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, retryAfter: res.headers.get('retry-after'), json: await res.json() };
+    };
+    const close = async () => {
+      await new Promise<void>((resolve) => local.close(() => resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+    };
+    return { call, close };
+  };
+
+  it('limits poll creation separately from other writes and never limits reads', async () => {
+    const { call, close } = await serve({
+      rateLimit: { create: { limit: 2, windowMs: 60_000 }, write: { limit: 3, windowMs: 60_000 } },
+    });
+    try {
+      const body = { title: 'Limited', dates: ['2026-10-01'] };
+      const first = await call('POST', '/api/polls', body);
+      expect(first.status).toBe(201);
+      expect((await call('POST', '/api/polls', {})).status).toBe(400); // rejected attempts count too
+      const blocked = await call('POST', '/api/polls', body);
+      expect(blocked.status).toBe(429);
+      expect(blocked.json).toEqual({ error: expect.any(String) });
+      expect(Number(blocked.retryAfter)).toBeGreaterThan(0);
+      expect(Number(blocked.retryAfter)).toBeLessThanOrEqual(60);
+
+      const id = first.json.id;
+      for (let i = 0; i < 5; i++) expect((await call('GET', `/api/polls/${id}`)).status).toBe(200);
+      for (let i = 0; i < 3; i++) {
+        expect((await call('POST', `/api/polls/${id}/respond`, { name: `W${i}`, availability: {} })).status).toBe(200);
+      }
+      const writeBlocked = await call('POST', `/api/polls/${id}/respond`, { name: 'W3', availability: {} });
+      expect(writeBlocked.status).toBe(429);
+      expect(writeBlocked.retryAfter).toBeTruthy();
+      expect((await call('DELETE', `/api/polls/${id}`, undefined, { 'X-Organizer-Code': first.json.organizerCode })).status).toBe(429);
+    } finally {
+      await close();
+    }
+  });
+
+  it('does not let a spoofed X-Forwarded-For header reset the limit', async () => {
+    const { call, close } = await serve({ rateLimit: { create: { limit: 1, windowMs: 60_000 } } });
+    try {
+      const body = { title: 'Spoof', dates: ['2026-10-01'] };
+      expect((await call('POST', '/api/polls', body, { 'X-Forwarded-For': '203.0.113.1' })).status).toBe(201);
+      expect((await call('POST', '/api/polls', body, { 'X-Forwarded-For': '203.0.113.2' })).status).toBe(429);
+    } finally {
+      await close();
+    }
+  });
+
+  it('counts each client separately and opens a new window once the old one ends', async () => {
+    let now = 1_000_000;
+    const limiter = createRateLimiter({ create: { limit: 1, windowMs: 60_000 } }, () => now);
+    const { call, close } = await serve({ rateLimit: limiter, clientIp: (req) => String(req.headers['x-test-client']) });
+    try {
+      const body = { title: 'Clients', dates: ['2026-10-01'] };
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': 'a' })).status).toBe(201);
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': 'b' })).status).toBe(201);
+      const blocked = await call('POST', '/api/polls', body, { 'X-Test-Client': 'a' });
+      expect(blocked.status).toBe(429);
+      expect(blocked.retryAfter).toBe('60');
+      now += 45_000;
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': 'a' })).retryAfter).toBe('15');
+      now += 15_000;
+      expect((await call('POST', '/api/polls', body, { 'X-Test-Client': 'a' })).status).toBe(201);
+    } finally {
+      await close();
+    }
+  });
+
+  it('applies the default limits: 10 polls an hour and 120 other writes per 10 minutes', async () => {
+    expect(DEFAULT_RATE_LIMITS).toEqual({
+      create: { limit: 10, windowMs: 3_600_000 },
+      write: { limit: 120, windowMs: 600_000 },
+    });
+    const { call, close } = await serve({});
+    try {
+      const body = { title: 'Default', dates: ['2026-10-01'] };
+      for (let i = 0; i < 10; i++) expect((await call('POST', '/api/polls', body)).status).toBe(201);
+      expect((await call('POST', '/api/polls', body)).status).toBe(429);
+    } finally {
+      await close();
+    }
   });
 });

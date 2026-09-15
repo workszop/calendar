@@ -3,7 +3,9 @@ import { createNetlifyPollStore } from '../../server/netlify-store';
 import { cleanupExpiredPolls, RETENTION_DAYS } from '../../server/retention';
 
 // Daily retention sweep: deletes polls whose last date is more than
-// RETENTION_DAYS in the past, even if nobody opens the app. Netlify runs
+// RETENTION_DAYS in the past, and polls without an organizer code, even if
+// nobody opens the app. It also moves polls out of the old single "polls"
+// array blob into per-poll blobs and deletes that array. Netlify runs
 // scheduled functions only on the published (production) deploy.
 export default async (): Promise<Response> => {
   const removed = await cleanupExpiredPolls(createNetlifyPollStore());

@@ -14,14 +14,16 @@ export const MAX_ID_LENGTH = 64;
 export const MAX_POLL_DATES = 60;
 /** Responses per poll. */
 export const MAX_PARTICIPANTS = 200;
-/** Polls kept at once (all polls share one storage record). */
-export const MAX_POLLS = 2000;
+/** Availability entries in one response: every 15-minute slot of every date. */
+export const MAX_AVAILABILITY_ENTRIES = MAX_POLL_DATES * 96;
+/** Largest stored poll, measured as compact JSON bytes. Each poll is its own storage record. */
+export const MAX_POLL_BYTES = 1_000_000;
 /** How far ahead a candidate date may be, in days from today (UTC). */
 export const MAX_DAYS_AHEAD = 366;
 /** Largest accepted JSON request body. 60 days of 15-minute answers is ~190 kB. */
 export const MAX_BODY_SIZE = '256kb';
 
-/** Poll ids are generated server-side from [a-z0-9_]; anything else is not a poll. */
+/** Poll ids are generated server-side as base64url; anything else is not a poll. */
 export const POLL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** Latest allowed YYYY-MM-DD for a candidate date, counted from `now` in UTC. */
