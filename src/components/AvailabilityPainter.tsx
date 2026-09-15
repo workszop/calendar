@@ -13,15 +13,41 @@ import { ActionDock } from './ActionDock';
 import { SlotTable } from './SlotTable';
 import './calendar-workspace.css';
 
+/**
+ * Why a save failed, so the painter can offer the right next step. The message
+ * comes from the server when it gave one.
+ * - forbidden: this browser may not edit the stored response (403)
+ * - participant-gone: the stored response was removed meanwhile (404)
+ * - closed: voting is closed because a time was locked (409)
+ * - rate-limited: too many requests (429)
+ * - other: any other refusal the server explained (4xx)
+ */
+export type SaveFailureKind = 'forbidden' | 'participant-gone' | 'closed' | 'rate-limited' | 'other';
+
+export class SaveAvailabilityError extends Error {
+  readonly kind: SaveFailureKind;
+  constructor(kind: SaveFailureKind, message: string) {
+    super(message);
+    this.name = 'SaveAvailabilityError';
+    this.kind = kind;
+  }
+}
+
 interface AvailabilityPainterProps {
   poll: Poll;
   /** Display-only interval; answers remain stored at the poll's atomic interval. */
   gridInterval?: GridInterval;
+  /**
+   * Saves the answer. `participantId` is set when updating this device's own
+   * response; `options.asNew` asks to drop that stored response first. Rejects
+   * with a SaveAvailabilityError when the failure needs a specific next step.
+   */
   onSaveAvailability: (
     name: string,
     email: string,
     availability: Record<string, SlotStatus>,
-    participantId?: string
+    participantId?: string,
+    options?: { asNew?: boolean }
   ) => Promise<void>;
   onCancel?: () => void;
   /** This device's own saved response, if it has one. Answers load from it, never from a typed name. */
@@ -66,6 +92,8 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [nameError, setNameError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Set after a 403 on an update: offers saving the painted grid as a new response.
+  const [canSaveAsNew, setCanSaveAsNew] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [bulkToolsOpen, setBulkToolsOpen] = useState(false);
   const [pendingBrushFocus, setPendingBrushFocus] = useState<number | null>(null);
@@ -295,12 +323,12 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     });
   };
 
-  const handleSave = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const save = async (asNew: boolean) => {
     if (isSaving) return;
     if (saveErrorTimerRef.current) clearTimeout(saveErrorTimerRef.current);
     setSaveError(null);
     setSaveState('idle');
+    setCanSaveAsNew(false);
     if (!userName.trim()) {
       setNameError('Enter your name to save your availability.');
       nameInputRef.current?.focus();
@@ -312,21 +340,37 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     setStoredUser({ name: userName.trim(), email: userEmail.trim() || undefined });
 
     try {
-      await onSaveAvailability(userName.trim(), userEmail.trim(), availability, ownParticipant?.id);
+      if (asNew) {
+        await onSaveAvailability(userName.trim(), userEmail.trim(), availability, undefined, { asNew: true });
+        loadedParticipantIdRef.current = undefined;
+      } else {
+        await onSaveAvailability(userName.trim(), userEmail.trim(), availability, ownParticipant?.id);
+      }
       setSaveState('saved');
     } catch (error) {
       console.error(error);
-      if (error instanceof Error && /participant not found/i.test(error.message)) {
+      const kind = error instanceof SaveAvailabilityError ? error.kind : undefined;
+      if (kind === 'participant-gone' || (error instanceof Error && /participant not found/i.test(error.message))) {
         // The response we were updating was removed meanwhile. The app forgets its
         // stored id, so the next save adds a new response.
         loadedParticipantIdRef.current = undefined;
         showSaveError('Your earlier response was removed. Save again to add it as new.');
+      } else if (error instanceof SaveAvailabilityError) {
+        // The server said why (edit refused, voting closed, rate limit...). After
+        // a refused edit the grid stays painted and can be saved as a new response.
+        if (kind === 'forbidden') setCanSaveAsNew(true);
+        showSaveError(error.message);
       } else {
         showSaveError('Could not save your availability. Please try again.');
       }
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleSave = (event: React.FormEvent) => {
+    event.preventDefault();
+    void save(false);
   };
 
   const renderBrush = ({ status, id, label, Icon }: BrushDef, index: number) => {
@@ -647,6 +691,18 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
             >
               {saveStatus}
             </div>
+            {canSaveAsNew && (
+              <button
+                type="button"
+                id="save-as-new-response-btn"
+                data-save-as-new
+                disabled={isSaving}
+                onClick={() => void save(true)}
+                className="d-answer-secondary-action"
+              >
+                Save as a new response
+              </button>
+            )}
           </div>
         </ActionDock>
       </form>
