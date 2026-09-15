@@ -98,6 +98,8 @@ export interface CleanupReport {
   imported: number;
   /** Old-layout records that were not readable polls. */
   skipped: number;
+  /** Old-layout records not reached before the time budget ran out. */
+  legacyRemaining: number;
   /** Whether moving the old layout failed (the sweep still ran). */
   legacyFailed: boolean;
   /** Stored polls looked at by the sweep. */
@@ -117,6 +119,7 @@ export function formatCleanupReport(report: CleanupReport): string {
     `skipped ${report.skipped} malformed old record(s)`,
     ...(report.failed ? [`${report.failed} failed`] : []),
     ...(report.legacyFailed ? ["legacy import failed"] : []),
+    ...(report.legacyRemaining ? [`${report.legacyRemaining} old-layout record(s) left for the next run`] : []),
     ...(report.remaining ? [`${report.remaining} left for the next run`] : []),
   ].join("; ");
 }
@@ -134,8 +137,10 @@ function shuffled<T>(items: T[], random: () => number): T[] {
 /**
  * Deletes retired polls now: imports any old-layout records worth keeping, then
  * sweeps every stored poll with bounded parallelism until the time budget runs
- * out. Each run visits polls in a new random order, so polls a run did not reach
- * get their turn on a later one. Failures are logged and counted, never thrown.
+ * out. The import shares that budget, so a large old layout is moved over
+ * several runs instead of being cut off before it can delete itself. Each run
+ * visits polls in a new random order, so polls a run did not reach get their
+ * turn on a later one. Failures are logged and counted, never thrown.
  */
 export async function cleanupExpiredPolls(store: PollStore, options: CleanupOptions = {}): Promise<CleanupReport> {
   const clock = options.clock ?? (() => new Date());
@@ -143,10 +148,12 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
   const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CLEANUP_CONCURRENCY);
   const timeBudgetMs = options.timeBudgetMs ?? DEFAULT_CLEANUP_BUDGET_MS;
   const started = now();
+  const outOfTime = () => now() - started >= timeBudgetMs;
   const report: CleanupReport = {
     removed: 0,
     imported: 0,
     skipped: 0,
+    legacyRemaining: 0,
     legacyFailed: false,
     checked: 0,
     failed: 0,
@@ -155,10 +162,11 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
 
   if (store.importLegacyPolls) {
     try {
-      const legacy = await store.importLegacyPolls((poll) => !isPollRetired(poll, clock()));
+      const legacy = await store.importLegacyPolls((poll) => !isPollRetired(poll, clock()), { shouldStop: outOfTime });
       report.removed += legacy.dropped;
       report.imported = legacy.imported;
       report.skipped = legacy.skipped;
+      report.legacyRemaining = legacy.remaining;
     } catch (err) {
       report.legacyFailed = true;
       console.error("Poll cleanup: moving the old poll layout failed; sweeping per-poll records anyway:", err);
@@ -167,7 +175,7 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
 
   const queue = shuffled(await store.listIds(), options.random ?? Math.random);
   const worker = async () => {
-    while (queue.length && now() - started < timeBudgetMs) {
+    while (queue.length && !outOfTime()) {
       const id = queue.pop()!;
       report.checked += 1;
       try {

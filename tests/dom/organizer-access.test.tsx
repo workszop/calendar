@@ -443,6 +443,26 @@ describe('organizer access', () => {
     });
   });
 
+  it('shows the not-found screen and forgets the codes when a save finds the poll deleted', async () => {
+    localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'part_me', editCode: 'code' } }));
+    const poll = ownPoll();
+    mockFetch(({ url, method }) => {
+      if (url === '/api/polls/p1' && method === 'GET') return jsonResponse(poll);
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      if (url === '/api/polls/p1/respond') return jsonResponse({ error: 'Poll not found' }, 404);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    fireEvent.click(await openAnswerTab());
+    await screen.findByRole('heading', { name: 'Poll error' });
+    expect(document.querySelector('[data-poll-error]')?.getAttribute('data-poll-error')).toBe('not-found');
+    // The painter is gone: nothing is left to paint on or resubmit.
+    expect(document.querySelector('[data-answer-grid]')).toBeNull();
+    expect(storedResponses()).toEqual({});
+  });
+
   it('clears the stored response when the server no longer knows the participant', async () => {
     localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'part_me', editCode: 'code' } }));
     const poll = ownPoll();
@@ -819,7 +839,7 @@ describe('organizer access', () => {
     expect(calls.filter((call) => call.url === '/api/polls/p1/finalize')).toHaveLength(1);
   });
 
-  it('omits an email that was always empty, sends a typed one and clears an emptied one', async () => {
+  it('sends the email field on every save: empty, typed, then emptied again', async () => {
     localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'part_me', editCode: 'code' } }));
     let poll = ownPoll();
     const calls = mockFetch(({ url, method }) => {
@@ -847,8 +867,9 @@ describe('organizer access', () => {
     await waitFor(() => expect(respondCalls(calls)).toHaveLength(3));
 
     const [emptyUpdate, typedUpdate, clearedUpdate] = respondCalls(calls);
-    expect(emptyUpdate.body).not.toHaveProperty('email');
-    expect((emptyUpdate.body as { participantId?: string }).participantId).toBe('part_me');
+    // An empty field is sent as "": this browser cannot see what the server
+    // stored, so absent (which keeps the stored email) is never the right call.
+    expect(emptyUpdate.body).toMatchObject({ email: '', participantId: 'part_me' });
     expect(typedUpdate.body).toMatchObject({ email: 'me@example.com', participantId: 'part_me' });
     expect(clearedUpdate.body).toMatchObject({ email: '', participantId: 'part_me' });
     expect(localStorage.getItem('timesync_user_email')).toBeNull();

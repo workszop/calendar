@@ -574,12 +574,17 @@ describe('poll API', () => {
     expect((await api('POST', '/api/polls', { title: 'Yesterday', dates: ['2026-09-12'] })).status).toBe(201);
   });
 
-  it('accepts a valid IANA time zone, rejects an unknown one and defaults an absent one', async () => {
+  it('accepts a zone-shaped time zone name, rejects other strings and defaults an absent one', async () => {
     const valid = await api('POST', '/api/polls', { title: 'Zoned', dates: ['2026-10-01'], timezone: 'Europe/Warsaw' });
     expect(valid.status).toBe(201);
     expect(valid.json.timezone).toBe('Europe/Warsaw');
 
-    for (const timezone of ['Mars/Olympus_Mons', 'not a zone', 'Europe/Warsaw; drop']) {
+    // A zone this runtime's zone data does not know (a newer browser) is kept as given.
+    const newer = await api('POST', '/api/polls', { title: 'Zoned', dates: ['2026-10-01'], timezone: 'Mars/Olympus_Mons' });
+    expect(newer.status).toBe(201);
+    expect(newer.json.timezone).toBe('Mars/Olympus_Mons');
+
+    for (const timezone of ['not a zone', 'Europe/Warsaw; drop', '/Europe', 'Europe//Warsaw']) {
       const invalid = await api('POST', '/api/polls', { title: 'Zoned', dates: ['2026-10-01'], timezone });
       expect(invalid.status, timezone).toBe(400);
       expect(invalid.json).toEqual({ error: 'timezone must be a valid IANA time zone, e.g. Europe/Warsaw.' });

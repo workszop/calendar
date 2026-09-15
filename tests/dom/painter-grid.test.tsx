@@ -261,7 +261,8 @@ describe('AvailabilityPainter display interval', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
     await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
     // No participant id: saving creates a new response instead of replacing Anna's.
-    expect(onSaveAvailability).toHaveBeenCalledWith('Anna', undefined, { [key('09:00')]: 'available' }, undefined);
+    // The email field is always sent, empty included, so the server never keeps an unseen one.
+    expect(onSaveAvailability).toHaveBeenCalledWith('Anna', '', { [key('09:00')]: 'available' }, undefined);
   });
 
   it("loads this device's own saved response by id and updates it", async () => {
@@ -333,7 +334,7 @@ describe('AvailabilityPainter display interval', () => {
     expect(cell('09:00').dataset.status).toBe('none');
 
     await savePainter();
-    expect(onSaveAvailability).toHaveBeenCalledWith('New Person', undefined, {}, undefined);
+    expect(onSaveAvailability).toHaveBeenCalledWith('New Person', '', {}, undefined);
   });
 
   it('preserves atomic votes while flipping 60-minute, 30-minute, then 60-minute views', () => {

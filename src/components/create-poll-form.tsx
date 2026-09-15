@@ -4,7 +4,7 @@ import { formatDateHeading, toDateStr } from '../utils/calendar';
 import { findDateWithoutMeetingFit, isValidHourWindow } from '../utils/consensus';
 import { latestPollDate, MAX_POLL_DATES } from '../utils/limits';
 import { getStoredUser, setStoredUser } from '../utils/storage';
-import { DRAFT_SLOT_INTERVAL, useProposalDraft } from '../hooks/useProposalDraft';
+import { useProposalDraft } from '../hooks/useProposalDraft';
 import type { ProposalDraft } from '../hooks/useProposalDraft';
 
 // ─── Constants ───
@@ -72,6 +72,27 @@ export function validateCreatePollTitle(title: string): Pick<CreatePollFormError
 }
 
 /**
+ * What is wrong with the proposed times of a draft for these dates, or
+ * undefined when they are usable: the hour window must be in order, every
+ * date must propose something and, given a meeting length, hold a back-to-back
+ * run as long as the meeting, judged as the server stores it (exact slots at
+ * the draft's interval, no hour overrides). Shared by "New Poll" and "Add
+ * Dates" so the two can never disagree.
+ */
+export function proposalHoursError(draft: ProposalDraft, dates: string[], durationMinutes?: number): string | undefined {
+  const { startHour, endHour, slotInterval } = draft;
+  if (!isValidHourWindow(startHour, endHour)) return 'Start hour must be earlier than end hour.';
+  const emptyDay = draft.findEmptyDay(dates);
+  if (emptyDay) return `${formatDateHeading(emptyDay).full}: propose at least one time.`;
+  if (!durationMinutes) return undefined;
+  const { proposedSlots } = draft.slotsFor(dates);
+  const shortDay = findDateWithoutMeetingFit({ durationMinutes, slotInterval, startHour, endHour, proposedSlots }, dates);
+  return shortDay
+    ? `${formatDateHeading(shortDay).full}: propose at least ${durationMinutes} minutes of back-to-back times.`
+    : undefined;
+}
+
+/**
  * Validate the complete creation draft and return the same future dates that
  * should be sent to the API. The create page uses
  * this function so empty-day and hour-window semantics cannot drift. With a
@@ -91,25 +112,8 @@ export function validateCreatePoll(
     errors.dates = 'Choose dates within the next year.';
   }
 
-  const { startHour, endHour } = values.draft;
-  if (!isValidHourWindow(startHour, endHour)) {
-    errors.hours = 'Start hour must be earlier than end hour.';
-  } else {
-    const emptyDay = values.draft.findEmptyDay(dates);
-    if (emptyDay) {
-      errors.hours = `${formatDateHeading(emptyDay).full}: propose at least one time.`;
-    } else if (values.durationMinutes) {
-      const { durationMinutes } = values;
-      const { proposedSlots } = values.draft.slotsFor(dates);
-      const shortDay = findDateWithoutMeetingFit(
-        { durationMinutes, slotInterval: DRAFT_SLOT_INTERVAL, startHour, endHour, proposedSlots },
-        dates
-      );
-      if (shortDay) {
-        errors.hours = `${formatDateHeading(shortDay).full}: propose at least ${durationMinutes} minutes of back-to-back times.`;
-      }
-    }
-  }
+  const hours = proposalHoursError(values.draft, dates, values.durationMinutes);
+  if (hours) errors.hours = hours;
 
   return { dates, errors };
 }
@@ -129,7 +133,7 @@ export function buildCreatePollPayload(
     startHour: values.draft.startHour,
     endHour: values.draft.endHour,
     proposedSlots: isFullRange ? undefined : proposedSlots,
-    slotInterval: DRAFT_SLOT_INTERVAL,
+    slotInterval: values.draft.slotInterval,
     dates,
     creatorName: values.creatorName.trim() || 'Organizer',
     creatorEmail: values.creatorEmail.trim(),

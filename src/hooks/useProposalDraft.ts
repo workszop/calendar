@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
+import type { Poll } from '../types';
 import { generateTimeSlots, isValidHourWindow } from '../utils/consensus';
 
 // ─── Proposed dates and times being drafted ───
 // Shared by "New Poll" and "Add Dates": selected dates, the hour range the grid
 // shows, and the exact slots proposed per date.
 
+/** Grid step for a poll being created; an existing poll drafts at its own interval. */
 export const DRAFT_SLOT_INTERVAL = 30;
 
 export function rangeTimes(startHour: number, endHour: number, interval = DRAFT_SLOT_INTERVAL): string[] {
@@ -15,6 +17,8 @@ export interface ProposalDraft {
   selectedDates: string[];
   startHour: number;
   endHour: number;
+  /** Minutes between grid rows: the poll's slot interval. */
+  slotInterval: Poll['slotInterval'];
   proposed: Record<string, string[]>;
   /** Grid rows for the current range. */
   gridTimes: string[];
@@ -30,14 +34,20 @@ export interface ProposalDraft {
   slotsFor: (dates: string[]) => { proposedSlots: Record<string, string[]>; isFullRange: boolean };
 }
 
-export function useProposalDraft(initialStart: number, initialEnd: number, initiallyEmpty = false): ProposalDraft {
+export function useProposalDraft(
+  initialStart: number,
+  initialEnd: number,
+  initiallyEmpty = false,
+  slotInterval: Poll['slotInterval'] = DRAFT_SLOT_INTERVAL
+): ProposalDraft {
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [startHour, setStartHour] = useState(initialStart);
   const [endHour, setEndHour] = useState(initialEnd);
   // date -> proposed slot starts, edited on the drag grid inside the hour range
   const [proposed, setProposed] = useState<Record<string, string[]>>({});
 
-  const gridTimes = useMemo(() => rangeTimes(startHour, endHour), [startHour, endHour]);
+  const times = (start: number, end: number) => rangeTimes(start, end, slotInterval);
+  const gridTimes = useMemo(() => times(startHour, endHour), [startHour, endHour, slotInterval]);
 
   // A newly selected date proposes the whole hour range in the legacy mode;
   // the creation page opts into an empty date so each atomic choice is
@@ -48,7 +58,7 @@ export function useProposalDraft(initialStart: number, initialEnd: number, initi
     setSelectedDates(dates);
     setProposed((prev) =>
       Object.fromEntries(
-        dates.map((d) => [d, prev[d] ?? (initiallyEmpty ? [] : rangeTimes(startHour, endHour))])
+        dates.map((d) => [d, prev[d] ?? (initiallyEmpty ? [] : times(startHour, endHour))])
       )
     );
   };
@@ -58,7 +68,7 @@ export function useProposalDraft(initialStart: number, initialEnd: number, initi
     setProposed((prev) => {
       const next = { ...prev };
       if (next[date]) delete next[date];
-      else next[date] = initiallyEmpty ? [] : rangeTimes(startHour, endHour);
+      else next[date] = initiallyEmpty ? [] : times(startHour, endHour);
       return next;
     });
   };
@@ -71,16 +81,16 @@ export function useProposalDraft(initialStart: number, initialEnd: number, initi
     setEndHour(nextEnd);
     // An inverted range is reported on submit; keep the picks until it is fixed.
     if (!isValidHourWindow(nextStart, nextEnd)) return;
-    const before = new Set(rangeTimes(startHour, endHour));
-    const after = rangeTimes(nextStart, nextEnd);
+    const before = new Set(times(startHour, endHour));
+    const after = times(nextStart, nextEnd);
     const added = after.filter((t) => !before.has(t));
     setProposed((prev) =>
       Object.fromEntries(
-        Object.entries(prev).map(([d, times]) => [
+        Object.entries(prev).map(([d, dayTimes]) => [
           d,
           [
             ...new Set([
-              ...times.filter((t) => after.includes(t)),
+              ...dayTimes.filter((t) => after.includes(t)),
               ...(initiallyEmpty ? [] : added),
             ]),
           ].sort(),
@@ -107,6 +117,7 @@ export function useProposalDraft(initialStart: number, initialEnd: number, initi
     selectedDates,
     startHour,
     endHour,
+    slotInterval,
     proposed,
     gridTimes,
     setProposed,

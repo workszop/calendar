@@ -78,8 +78,10 @@ bun run lint       # tsc --noEmit
 ```
 
 Grids show times in the poll's own time zone, labelled with that zone. A new
-poll must name a valid IANA time zone (e.g. `Europe/Warsaw`) or leave it out to
-use the server's zone.
+poll names an IANA time zone (e.g. `Europe/Warsaw`) or leaves it out to use the
+server's zone. The server only checks the shape of the name, so a browser whose
+zone data is newer than the server's can still create polls; a zone a viewer's
+browser does not know is exported as floating local time.
 
 ## Workspace
 

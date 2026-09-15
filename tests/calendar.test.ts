@@ -239,6 +239,17 @@ describe('zoned calendar exports', () => {
       enddt: '2026-10-01T18:30:00Z',
     });
   });
+
+  it('exports an unknown zone as floating wall-clock time instead of stamping it UTC', () => {
+    expect(exportsFor('Not/AZone', zonedSlot('2026-10-01', '23:30', '24:00'))).toEqual({
+      dtstart: '20261001T233000',
+      dtend: '20261002T000000',
+      googleDates: '20261001T233000/20261002T000000',
+      ctz: null,
+      startdt: '2026-10-01T23:30:00',
+      enddt: '2026-10-02T00:00:00',
+    });
+  });
 });
 
 describe('describeTimeZoneDifference', () => {

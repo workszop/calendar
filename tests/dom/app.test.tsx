@@ -411,6 +411,28 @@ describe('App navigation and home contract', () => {
     expect(Object.keys(JSON.parse(localStorage.getItem('timesync_recent_polls') ?? '{}'))).toContain('gone');
   });
 
+  it('keeps the codes when a 404 is an HTML page rather than the API answering', async () => {
+    localStorage.setItem('timesync_organizer_codes', JSON.stringify({ p1: 'organizer-code' }));
+    localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'x', editCode: 'e' } }));
+    const htmlNotFound = () =>
+      Promise.resolve(new Response('<!doctype html><title>Not Found</title>', { status: 404, headers: { 'Content-Type': 'text/html' } }));
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = route(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(makePoll('p1', 'P1'))]));
+      if (url === '/api/polls/p1/access' || url === '/api/polls/p1') return htmlNotFound();
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Poll error' });
+    expect(document.querySelector('[data-poll-error]')?.getAttribute('data-poll-error')).toBe('other');
+    expect(screen.getByRole('alert').textContent).not.toMatch(/no longer exists/);
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).toEqual({ p1: 'organizer-code' });
+    expect(JSON.parse(localStorage.getItem('timesync_responses') ?? '{}')).toEqual({ p1: { participantId: 'x', editCode: 'e' } });
+  });
+
   it('forgets a poll whose detail request returns 404', async () => {
     localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'x', editCode: 'e' } }));
     const fetchMock = vi.fn((input: RequestInfo | URL) => {

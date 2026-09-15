@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Poll } from '../types';
-import { formatDateHeading, toDateStr } from '../utils/calendar';
-import { findDateWithoutMeetingFit, isValidHourWindow } from '../utils/consensus';
+import { toDateStr } from '../utils/calendar';
+import { isValidHourWindow } from '../utils/consensus';
 import { latestPollDate, MAX_POLL_DATES } from '../utils/limits';
 import { useProposalDraft } from '../hooks/useProposalDraft';
 import { Modal } from './Modal';
 import { MonthCalendar, monthOfDateStr, startOfMonth } from './MonthCalendar';
 import { DayTimesEditor } from './DayTimesEditor';
+import { proposalHoursError } from './create-poll-form';
 
 // ─── Types ───
 interface ExtendPollModalProps {
@@ -38,8 +39,10 @@ function initialRange(poll: Poll): [number, number] {
 /** Adds candidate dates to an existing poll; existing dates and answers stay. */
 export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClose, poll, onAddDates }) => {
   // New days start empty, like poll creation, so every proposal is deliberate.
-  const draft = useProposalDraft(...initialRange(poll), true);
-  const { selectedDates, startHour, endHour } = draft;
+  // The grid steps at the poll's own interval: its meeting fit is judged at
+  // that interval, so a 15-minute poll needs 15-minute proposals.
+  const draft = useProposalDraft(...initialRange(poll), true, poll.slotInterval);
+  const { selectedDates } = draft;
   const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -88,19 +91,8 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
     } else if (dates.some((d) => d > latestPollDate(new Date()))) {
       nextErrors.dates = 'Choose dates within the next year.';
     }
-    if (!isValidHourWindow(startHour, endHour)) {
-      nextErrors.hours = 'Start hour must be earlier than end hour.';
-    } else {
-      const emptyDay = draft.findEmptyDay(dates);
-      // Judge the new days as the server stores them: exact slots, no hour overrides.
-      const unfitDay = emptyDay
-        ? undefined
-        : findDateWithoutMeetingFit({ ...poll, proposedSlots, dayHours: undefined }, dates);
-      if (emptyDay) nextErrors.hours = `${formatDateHeading(emptyDay).full}: propose at least one time.`;
-      else if (unfitDay) {
-        nextErrors.hours = `${formatDateHeading(unfitDay).full}: propose at least ${poll.durationMinutes} minutes of back-to-back times.`;
-      }
-    }
+    const hours = proposalHoursError(draft, dates, poll.durationMinutes);
+    if (hours) nextErrors.hours = hours;
     draft.setDates(dates);
     focusErrorsRef.current = true;
     setErrors(nextErrors);

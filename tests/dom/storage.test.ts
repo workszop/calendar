@@ -147,6 +147,23 @@ describe('getKnownPollIds', () => {
     expect(recent.p0).toBeUndefined();
   });
 
+  it('drops a poll from the home list once its last code is refused, but not while one code remains', async () => {
+    const storage = await freshStorage();
+    storage.setOrganizerCode('both', 'c');
+    storage.setStoredResponse('both', { participantId: 'p', editCode: 'e' });
+    storage.touchPoll('both', 2);
+    storage.setOrganizerCode('mine', 'c');
+    storage.touchPoll('mine', 1);
+
+    storage.removeOrganizerCode('both');
+    expect(storage.getKnownPollIds(10)).toEqual(['both', 'mine']);
+    storage.removeStoredResponse('both');
+    expect(storage.getKnownPollIds(10)).toEqual(['mine']);
+    storage.removeOrganizerCode('mine');
+    expect(storage.getKnownPollIds(10)).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('timesync_recent_polls') ?? '{}')).toEqual({});
+  });
+
   it('forgets every trace of a poll', async () => {
     const storage = await freshStorage();
     storage.setOrganizerCode('gone', 'c');

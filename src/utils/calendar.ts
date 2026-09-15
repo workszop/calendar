@@ -145,11 +145,21 @@ function toIsoUtc(instant: Date): string {
   return instant.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-function slotInstants(poll: Poll, slot: FinalizedSlot): { start: Date; end: Date } {
-  return {
-    start: zonedTimeToUtc(slot.date, slot.startTime, poll.timezone),
-    end: zonedTimeToUtc(slot.date, slot.endTime, poll.timezone),
-  };
+/**
+ * The meeting's start and end for a calendar export. With a zone this runtime
+ * knows they are UTC instants ("...Z"). With an unknown zone name the wall
+ * clock is exported as floating time (no "Z"), which calendars read in the
+ * viewer's own zone: not certain to be right, but never the silent hours-off
+ * shift that stamping the wall clock as UTC would give.
+ */
+function exportStamps(poll: Poll, slot: FinalizedSlot): { compact: [string, string]; iso: [string, string] } {
+  const zone = isValidTimeZone(poll.timezone) ? poll.timezone : 'UTC';
+  const start = zonedTimeToUtc(slot.date, slot.startTime, zone);
+  const end = zonedTimeToUtc(slot.date, slot.endTime, zone);
+  const floating = zone !== poll.timezone;
+  const compact = (instant: Date) => (floating ? toCompactUtc(instant).slice(0, -1) : toCompactUtc(instant));
+  const iso = (instant: Date) => (floating ? toIsoUtc(instant).slice(0, -1) : toIsoUtc(instant));
+  return { compact: [compact(start), compact(end)], iso: [iso(start), iso(end)] };
 }
 
 /** The browser's own IANA zone, or UTC when the runtime does not say. */
@@ -212,7 +222,7 @@ export function describeTimeZoneDifference(
 }
 
 export function generateGoogleCalendarUrl(poll: Poll, slot: FinalizedSlot): string {
-  const { start, end } = slotInstants(poll, slot);
+  const { compact } = exportStamps(poll, slot);
 
   const title = encodeURIComponent(poll.title);
   const details = encodeURIComponent(
@@ -221,18 +231,18 @@ export function generateGoogleCalendarUrl(poll: Poll, slot: FinalizedSlot): stri
   const location = encodeURIComponent(poll.location || '');
   const zone = isValidTimeZone(poll.timezone) ? `&ctz=${encodeURIComponent(poll.timezone)}` : '';
 
-  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${toCompactUtc(start)}/${toCompactUtc(end)}&details=${details}&location=${location}${zone}`;
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${compact[0]}/${compact[1]}&details=${details}&location=${location}${zone}`;
 }
 
 export function generateOutlookUrl(poll: Poll, slot: FinalizedSlot): string {
-  const { start, end } = slotInstants(poll, slot);
+  const { iso } = exportStamps(poll, slot);
 
   const params = new URLSearchParams({
     path: '/calendar/action/compose',
     rru: 'addevent',
     subject: poll.title,
-    startdt: toIsoUtc(start),
-    enddt: toIsoUtc(end),
+    startdt: iso[0],
+    enddt: iso[1],
     body: `${poll.description || ''}\n\nAgreed timing poll: ${window.location.href}`,
     location: poll.location || '',
   });
@@ -291,7 +301,7 @@ function stableIcsUid(poll: Poll, slot: FinalizedSlot): string {
 
 /** Build an RFC 5545 calendar object for deterministic, testable exports. */
 export function generateIcsContent(poll: Poll, slot: FinalizedSlot): string {
-  const { start, end } = slotInstants(poll, slot);
+  const { compact } = exportStamps(poll, slot);
 
   const lines = [
     'BEGIN:VCALENDAR',
@@ -302,8 +312,8 @@ export function generateIcsContent(poll: Poll, slot: FinalizedSlot): string {
     'BEGIN:VEVENT',
     `UID:${stableIcsUid(poll, slot)}`,
     `DTSTAMP:${toCompactUtc(new Date())}`,
-    `DTSTART:${toCompactUtc(start)}`,
-    `DTEND:${toCompactUtc(end)}`,
+    `DTSTART:${compact[0]}`,
+    `DTEND:${compact[1]}`,
     `SUMMARY:${escapeIcsText(poll.title)}`,
     `DESCRIPTION:${escapeIcsText(poll.description || '')}`,
     `LOCATION:${escapeIcsText(poll.location || '')}`,

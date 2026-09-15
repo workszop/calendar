@@ -118,6 +118,7 @@ export function setOrganizerCode(pollId: string, code: string): void {
 
 export function removeOrganizerCode(pollId: string): void {
   writeMap(STORAGE_KEYS.organizerCodes, withoutKey(readMap<string>(STORAGE_KEYS.organizerCodes), pollId));
+  pruneRecentPoll(pollId);
 }
 
 export function getStoredResponse(pollId: string): StoredResponse | undefined {
@@ -133,6 +134,7 @@ export function setStoredResponse(pollId: string, response: StoredResponse): voi
 
 export function removeStoredResponse(pollId: string): void {
   writeMap(STORAGE_KEYS.responses, withoutKey(readMap<StoredResponse>(STORAGE_KEYS.responses), pollId));
+  pruneRecentPoll(pollId);
 }
 
 // ─── Pending edit codes ───
@@ -167,13 +169,22 @@ export function touchPoll(pollId: string, now = Date.now()): void {
   writeMap(STORAGE_KEYS.recentPolls, Object.fromEntries(kept));
 }
 
+/**
+ * Drops a poll from the recency list once neither of its codes remains: a
+ * poll this device can no longer manage or update is not "created or answered
+ * here" any more, so the home page stops listing it.
+ */
+function pruneRecentPoll(pollId: string): void {
+  if (getOrganizerCode(pollId) || getStoredResponse(pollId)) return;
+  const recent = readMap<number>(STORAGE_KEYS.recentPolls);
+  if (pollId in recent) writeMap(STORAGE_KEYS.recentPolls, withoutKey(recent, pollId));
+}
+
 /** Drops every code for a poll, e.g. after it was deleted. */
 export function forgetPoll(pollId: string): void {
   removeOrganizerCode(pollId);
   removeStoredResponse(pollId);
   clearPendingEditCode(pollId);
-  const recent = readMap<number>(STORAGE_KEYS.recentPolls);
-  if (pollId in recent) writeMap(STORAGE_KEYS.recentPolls, withoutKey(recent, pollId));
 }
 
 /** Polls this device created or answered, most recently touched first. */

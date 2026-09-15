@@ -123,6 +123,31 @@ describe('retention store wrapper', () => {
     expect(client.keys()).toEqual(['poll/kept']);
   });
 
+  it('gives the legacy import the same time budget and finishes it on a later run', async () => {
+    const client = new MemoryBlobClient();
+    const legacy = Array.from({ length: 6 }, (_, i) => makePoll(`legacy_${i}`, ['2026-10-01']));
+    client.seed('polls', legacy);
+    client.seed('poll/old', makePoll('old', ['2026-08-01']));
+    const store = createBlobPollStore(client, { concurrency: 1 });
+
+    // Every write costs a second; the budget allows three.
+    let elapsed = 0;
+    const write = client.setJSON.bind(client);
+    client.setJSON = async (key, data, options) => {
+      elapsed += 1000;
+      return write(key, data, options);
+    };
+    const first = await cleanupExpiredPolls(store, { clock, timeBudgetMs: 3000, now: () => elapsed });
+    expect(first).toMatchObject({ imported: 3, legacyRemaining: 3, checked: 0, remaining: 4 });
+    expect(formatCleanupReport(first)).toMatch(/3 old-layout record\(s\) left for the next run/);
+    expect(client.keys()).toContain('polls');
+
+    elapsed = 0;
+    const second = await cleanupExpiredPolls(store, { clock, timeBudgetMs: 60_000, now: () => elapsed });
+    expect(second).toMatchObject({ imported: 3, legacyRemaining: 0, removed: 1, remaining: 0 });
+    expect(client.keys()).toEqual(legacy.map((poll) => `poll/${poll.id}`));
+  });
+
   it('hides expired and ownerless polls that are still in the legacy array', async () => {
     const client = new MemoryBlobClient();
     const ownerless = { ...makePoll('ownerless', ['2026-12-01']), organizerCodeHash: undefined };

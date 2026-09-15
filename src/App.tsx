@@ -86,6 +86,18 @@ class ApiError extends Error {
 function isPollGoneError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404 && err.message === POLL_GONE_MESSAGE;
 }
+/**
+ * Whether a failed response came from the API itself. A platform or proxy
+ * answers with an HTML page; only the API's own JSON 404 means the poll is gone.
+ */
+function isApiJson(res: Response): boolean {
+  return /\bapplication\/json\b/i.test(res.headers.get('content-type') ?? '');
+}
+/** A poll-level 404 from the API, as opposed to a missing participant or a page from a proxy. */
+function isPollGone(res: Response, message: string): boolean {
+  return res.status === 404 && isApiJson(res) && !/participant not found/i.test(message);
+}
+/** The API's error message, or `fallback`. A rate limit reads the same on every route. */
 async function readError(res: Response, fallback: string): Promise<ApiError> {
   try {
     const body: unknown = await res.json();
@@ -94,7 +106,7 @@ async function readError(res: Response, fallback: string): Promise<ApiError> {
   } catch {
     // Empty or non-JSON body: use the generic message.
   }
-  return new ApiError(res.status, fallback);
+  return new ApiError(res.status, res.status === 429 ? RATE_LIMIT_MESSAGE : fallback);
 }
 
 // ─── API requests ───
@@ -115,6 +127,7 @@ export const apiRetry = { attempts: 3, baseDelayMs: 150 };
 const RATE_LIMIT_MESSAGE = 'Too many requests. Please wait a moment and try again.';
 const POLL_GONE_MESSAGE = 'This poll no longer exists. It may have been deleted.';
 const OFFLINE_MESSAGE = 'Check your connection and try again.';
+const API_UNREACHABLE_MESSAGE = 'The poll service did not answer. Please try again in a moment.';
 
 async function isRetryableConflict(res: Response): Promise<boolean> {
   if (res.status !== 409) return false;
@@ -142,21 +155,24 @@ export async function fetchWithRetry(input: string, init?: RequestInit): Promise
 
 /**
  * The server's verdict on an organizer code. `organizer` is null when the code
- * could not be checked (network error, 429, 5xx); `message` then says why.
+ * could not be checked (network error, 429, 5xx, or the poll is gone);
+ * `message` then says why.
  */
-type AccessCheck = { organizer: boolean } | { organizer: null; status: number | null; message: string };
+type AccessCheck =
+  | { organizer: boolean }
+  | { organizer: null; status: number | null; pollGone: boolean; message: string };
 
 async function checkOrganizerCode(pollId: string, code: string, signal?: AbortSignal): Promise<AccessCheck> {
   try {
     const res = await fetch(pollPath(pollId, '/access'), { headers: { 'X-Organizer-Code': code }, signal });
     if (!res.ok) {
-      const fallback = res.status === 429 ? RATE_LIMIT_MESSAGE : 'Please try again.';
-      return { organizer: null, status: res.status, message: (await readError(res, fallback)).message };
+      const failure = await readError(res, 'Please try again.');
+      return { organizer: null, status: res.status, pollGone: isPollGone(res, failure.message), message: failure.message };
     }
     const body: unknown = await res.json();
     return { organizer: (body as { organizer?: unknown } | null)?.organizer === true };
   } catch {
-    return { organizer: null, status: null, message: OFFLINE_MESSAGE };
+    return { organizer: null, status: null, pollGone: false, message: OFFLINE_MESSAGE };
   }
 }
 
@@ -189,6 +205,15 @@ function isPollShape(value: unknown): value is Poll {
     Array.isArray(poll.dates) &&
     Array.isArray(poll.participants)
   );
+}
+/** Requests one poll's detail with this browser's organizer code, so organizer-only fields arrive. */
+function fetchPollDetail(pollId: string, signal?: AbortSignal): Promise<Response> {
+  return fetch(pollPath(pollId), { signal, headers: { ...COMPACT_AVAILABILITY, ...organizerHeaders(pollId) } });
+}
+/** The poll in a successful detail response, or null when the body is not that poll. */
+async function readPollDetail(res: Response, pollId: string): Promise<Poll | null> {
+  const data: unknown = await readPollBody(res).catch(() => null);
+  return isPollShape(data) && data.id === pollId ? data : null;
 }
 // ─── Component ───
 
@@ -282,9 +307,9 @@ export default function App() {
 
   /** Reads a failed organizer action's error, handling a 403 or a deleted poll on the way. */
   const organizerFailure = useCallback(async (res: Response, pollId: string, fallback: string) => {
-    const failure = await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : fallback);
+    const failure = await readError(res, fallback);
     if (res.status === 403) handleOrganizerForbidden(pollId, failure.message);
-    if (res.status === 404 && !/participant not found/i.test(failure.message)) {
+    if (isPollGone(res, failure.message)) {
       handlePollGone(pollId);
       return new ApiError(404, POLL_GONE_MESSAGE);
     }
@@ -404,8 +429,8 @@ export default function App() {
           const access = await checkOrganizerCode(pollId, linkCode, controller.signal);
           if (requestId !== navigationRequestRef.current) return;
           if (access.organizer === null) {
-            // A 404 is answered by the poll request below.
-            if (access.status !== 404) linkUnchecked = access.message;
+            // A deleted poll is answered by the poll request below.
+            if (!access.pollGone) linkUnchecked = access.message;
           } else if (access.organizer) {
             setOrganizerCode(pollId, linkCode);
             touchPoll(pollId);
@@ -424,22 +449,23 @@ export default function App() {
           : linkVerified
             ? Promise.resolve({ organizer: true })
             : checkOrganizerCode(pollId, storedCode, controller.signal);
-        const res = await fetch(pollPath(pollId), {
-          signal: controller.signal,
-          headers: { ...COMPACT_AVAILABILITY, ...organizerHeaders(pollId) },
-        });
+        const res = await fetchPollDetail(pollId, controller.signal);
         if (!res.ok) {
-          if (res.status === 404) {
+          // Only the API's own 404 means the poll is gone. Codes are shown once
+          // at creation, so a proxy's HTML 404 (function missing, dev server
+          // without the API) must never be a reason to forget them.
+          if (res.status === 404 && isApiJson(res)) {
             forgetPoll(pollId);
             setAccessVersion((version) => version + 1);
             if (linkCode) clearOrganizerCodeFromUrl();
             throw new ApiError(404, POLL_GONE_MESSAGE);
           }
+          if (res.status === 404) throw new Error(API_UNREACHABLE_MESSAGE);
           // 429 and 5xx are temporary: never "not found", never a reason to forget.
-          throw await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to load poll');
+          throw await readError(res, 'Failed to load poll');
         }
-        const data: unknown = await readPollBody(res).catch(() => null);
-        if (!isPollShape(data) || data.id !== pollId) throw new Error('Poll not found');
+        const data = await readPollDetail(res, pollId);
+        if (!data) throw new Error('Poll not found');
         if (requestId !== navigationRequestRef.current) return;
         commitActivePoll(data);
         setPainterKey((key) => key + 1);
@@ -589,7 +615,7 @@ export default function App() {
 
   const handleSaveAvailability = async (
     name: string,
-    email: string | undefined,
+    email: string,
     availability: Record<string, SlotStatus>,
     participantId?: string,
     options?: { asNew?: boolean }
@@ -622,23 +648,25 @@ export default function App() {
       },
       body: JSON.stringify({
         name,
-        // Absent keeps the stored email; "" (a field the user emptied) clears it.
-        ...(email === undefined ? {} : { email }),
+        // Always sent: an absent field would keep whatever email the server
+        // stored, which this browser cannot see.
+        email,
         timezone: BROWSER_TIMEZONE,
         availability,
         participantId,
       }),
     });
     if (!res.ok) {
-      const failure = await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to save response');
-      if (res.status === 404 && /participant not found/i.test(failure.message)) {
+      const failure = await readError(res, 'Failed to save response');
+      if (res.status === 404 && isApiJson(res) && /participant not found/i.test(failure.message)) {
         removeStoredResponse(pollId);
         setAccessVersion((version) => version + 1);
         throw new SaveAvailabilityError('participant-gone', failure.message);
       }
-      if (res.status === 404) {
-        forgetPoll(pollId);
-        setAccessVersion((version) => version + 1);
+      if (isPollGone(res, failure.message)) {
+        // The poll was deleted meanwhile: replace the workspace with the
+        // not-found screen instead of leaving a dead grid to paint on.
+        handlePollGone(pollId);
         throw new SaveAvailabilityError('other', POLL_GONE_MESSAGE);
       }
       if (res.status === 403 && participantId) {
@@ -798,7 +826,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pollData),
       });
-      if (!res.ok) throw await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to create poll');
+      if (!res.ok) throw await readError(res, 'Failed to create poll');
       const { organizerCode, ...newPoll } = await readPollBody<Poll & { organizerCode?: string }>(res);
       // Stored before anything else, so a later navigation can never lose it.
       if (organizerCode) {
@@ -873,7 +901,7 @@ export default function App() {
     if (!pollId) return false;
     const access = await checkOrganizerCode(pollId, code);
     if (access.organizer === null) {
-      if (access.status === 404) {
+      if (access.pollGone) {
         handlePollGone(pollId);
         throw new ApiError(404, POLL_GONE_MESSAGE);
       }
@@ -888,10 +916,10 @@ export default function App() {
     setOrganizerNotice(null);
     showToast('Organizer tools unlocked');
     // Reload so organizer-only details (such as emails) arrive.
-    const detail = await fetch(pollPath(pollId), { headers: { ...COMPACT_AVAILABILITY, ...organizerHeaders(pollId) } });
+    const detail = await fetchPollDetail(pollId);
     if (detail.ok) {
-      const data: unknown = await readPollBody(detail).catch(() => null);
-      if (isPollShape(data) && data.id === pollId && activePollIdRef.current === pollId) commitActivePoll(data);
+      const data = await readPollDetail(detail, pollId);
+      if (data && activePollIdRef.current === pollId) commitActivePoll(data);
     }
     void fetchPollsList();
     return true;

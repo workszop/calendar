@@ -33,6 +33,7 @@ interface CopyDialogState {
 // ─── Constants ───
 const MIN_HOUR = 0;
 const MAX_HOUR = 24;
+// The visible hour range moves in half hours whatever the grid's interval.
 const HOUR_STEP = DRAFT_SLOT_INTERVAL / 60;
 
 // ─── Helpers ───
@@ -49,7 +50,7 @@ function hourOptions(start: number, end: number, step: number): number[] {
   return values;
 }
 
-function rangesForDay(times: string[], proposed: string[]): SelectedRange[] {
+function rangesForDay(times: string[], proposed: string[], slotInterval: number): SelectedRange[] {
   const proposedSet = new Set(proposed);
   const ranges: SelectedRange[] = [];
   let current: string[] = [];
@@ -58,7 +59,7 @@ function rangesForDay(times: string[], proposed: string[]): SelectedRange[] {
     if (!current.length) return;
     ranges.push({
       startTime: current[0],
-      endTime: addMinutesToTime(current[current.length - 1], DRAFT_SLOT_INTERVAL),
+      endTime: addMinutesToTime(current[current.length - 1], slotInterval),
       slotTimes: current,
     });
     current = [];
@@ -82,9 +83,9 @@ function displayRangeText(range: SelectedRange): string {
 
 // ─── Component ───
 /**
- * Compact per-day proposal editor. Every cell is one 30-minute slot. A stroke
- * may sweep vertically, but the origin date is deliberately locked so a
- * diagonal gesture can never edit another day by accident.
+ * Compact per-day proposal editor. Every cell is one slot at the draft's
+ * interval. A stroke may sweep vertically, but the origin date is deliberately
+ * locked so a diagonal gesture can never edit another day by accident.
  */
 export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
   draft,
@@ -111,6 +112,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
   // ─── Derived ───
   const selectedDates = draft.selectedDates;
   const times = draft.gridTimes;
+  const { slotInterval } = draft;
   const dateHeadings = useMemo(
     () => new Map(selectedDates.map((date) => [date, formatDateHeading(date)])),
     [selectedDates]
@@ -125,9 +127,9 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
   const rangesByDate = useMemo(
     () =>
       new Map(
-        selectedDates.map((date) => [date, rangesForDay(times, draft.proposed[date] ?? [])])
+        selectedDates.map((date) => [date, rangesForDay(times, draft.proposed[date] ?? [], slotInterval)])
       ),
-    [draft.proposed, selectedDates, times]
+    [draft.proposed, selectedDates, times, slotInterval]
   );
   const startOptions = useMemo(
     () => hourOptions(MIN_HOUR, Math.min(MAX_HOUR, draft.startHour), HOUR_STEP),
@@ -361,9 +363,9 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     const ranges = rangesByDate.get(date) ?? [];
     const range = ranges.find((candidate) => candidate.slotTimes.includes(time));
     const isRangeStart = Boolean(range && range.startTime === time);
-    const isRangeEnd = Boolean(range && range.endTime === addMinutesToTime(time, DRAFT_SLOT_INTERVAL));
+    const endTime = addMinutesToTime(time, slotInterval);
+    const isRangeEnd = Boolean(range && range.endTime === endTime);
     const heading = dateHeadings.get(date);
-    const endTime = addMinutesToTime(time, DRAFT_SLOT_INTERVAL);
     const label = `${heading?.full ?? date}, ${formatTimeSlot(time)} – ${formatTimeSlot(endTime)}: ${
       selected ? 'proposed' : 'not proposed'
     }`;

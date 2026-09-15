@@ -252,6 +252,28 @@ describe("cloud PollStore API", () => {
     ).toBe(200);
   });
 
+  it("leaves a corrupt poll out of the list and names it in the single read's 500", async () => {
+    const client = new MemoryBlobClient();
+    const api = await start(createApi(createBlobPollStore(client)));
+    openServers.push(api.server);
+    const created = await request(api.base, "POST", "/api/polls", createBody("Fine"));
+    const goodId = created.json.id as string;
+    client.seed("poll/poll_bad", { id: "poll_bad", title: "no participants" });
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const list = await request(api.base, "GET", `/api/polls?ids=${goodId},poll_bad`);
+      expect(list.response.status).toBe(200);
+      expect((list.json as Array<{ id: string }>).map((poll) => poll.id)).toEqual([goodId]);
+
+      const single = await request(api.base, "GET", "/api/polls/poll_bad");
+      expect(single.response.status).toBe(500);
+      expect(single.json).toEqual({ error: "The stored record for poll poll_bad is unreadable." });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("returns no-store on reads and JSON 500 when the blob read fails", async () => {
     const client = new MemoryBlobClient();
     client.readError = new Error("blob transport unavailable");

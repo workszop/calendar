@@ -37,7 +37,7 @@ import {
   ORGANIZER_HEADER,
   readCodeHeader,
 } from "./auth";
-import { createFilePollStore, PollStoreConflictError, type PollStore } from "./poll-store";
+import { createFilePollStore, PollStoreConflictError, PollUnreadableError, type PollStore } from "./poll-store";
 import {
   createRateLimiter,
   expressClientIp,
@@ -55,6 +55,11 @@ const TIME_RE = /^(?:([01]\d|2[0-3]):[0-5]\d|24:00)$/;
 const SLOT_KEY_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const SLOT_STATUSES: readonly SlotStatus[] = ["available", "preferred", "if_needed", "unavailable"];
 const MAX_DURATION_MINUTES = 480;
+// Shaped like an IANA zone name, e.g. "Europe/Warsaw" or "Etc/GMT+1". The
+// server never converts times, so a name its own zone data does not know yet
+// (a browser newer than this runtime) is stored as given rather than refused
+// with nothing the organizer could change.
+const TIMEZONE_NAME_RE = /^[A-Za-z][A-Za-z0-9._+-]*(?:\/[A-Za-z0-9._+-]+)*$/;
 
 function isCalendarDate(value: unknown): value is string {
   if (typeof value !== "string" || !DATE_RE.test(value) || value.startsWith("0000")) return false;
@@ -62,13 +67,21 @@ function isCalendarDate(value: unknown): value is string {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-/** A time zone name this runtime's Intl accepts, e.g. "Europe/Warsaw". */
-function isTimeZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat(undefined, { timeZone: value });
-    return true;
-  } catch {
-    return false;
+/**
+ * A refusal decided inside a store update closure. Throwing it aborts the
+ * write; the error handler turns it into the JSON answer. A closure may run
+ * again after a storage conflict, so a thrown refusal can never leak from an
+ * earlier attempt the way a captured flag could.
+ */
+class RequestError extends Error {
+  readonly status: number;
+  readonly statusCode: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+    this.statusCode = status;
   }
 }
 
@@ -388,7 +401,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       }
 
       const timezone = optionalText(body.timezone);
-      if (timezone && !isTimeZone(timezone)) {
+      if (timezone && !TIMEZONE_NAME_RE.test(timezone)) {
         res.status(400).json({ error: "timezone must be a valid IANA time zone, e.g. Europe/Warsaw." });
         return;
       }
@@ -543,23 +556,14 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
 
-      let failure: { status: number; error: string } | null = null;
       const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
       const poll = await pollStore.update(req.params.id, (found) => {
-        failure = null;
-        const reject = (status: number, error: string) => {
-          failure = { status, error };
-          return null;
-        };
-
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) return reject(403, ORGANIZER_ONLY);
-        if (found.finalizedSlot) {
-          return reject(409, "Re-open voting before adding dates.");
-        }
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+        if (found.finalizedSlot) throw new RequestError(409, "Re-open voting before adding dates.");
         const parsed = parseProposedSlots(body.proposedSlots, newDates, found.slotInterval);
-        if (!parsed.ok) return reject(400, parsed.error);
-        if (!parsed.value) return reject(400, "proposedSlots is required: list the times for each new date.");
+        if (!parsed.ok) throw new RequestError(400, parsed.error);
+        if (!parsed.value) throw new RequestError(400, "proposedSlots is required: list the times for each new date.");
         const added = parsed.value;
         // Already applied, e.g. a CAS replay of this very request after its
         // write committed: every date is there with exactly these times.
@@ -567,9 +571,9 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           return found;
         }
         const duplicate = newDates.find((d) => found.dates.includes(d));
-        if (duplicate) return reject(400, `${duplicate} is already one of the poll dates.`);
+        if (duplicate) throw new RequestError(400, `${duplicate} is already one of the poll dates.`);
         if (found.dates.length + newDates.length > MAX_POLL_DATES) {
-          return reject(400, `A poll can have at most ${MAX_POLL_DATES} dates.`);
+          throw new RequestError(400, `A poll can have at most ${MAX_POLL_DATES} dates.`);
         }
 
         const defaultSlots = generateTimeSlots(found.startHour, found.endHour, found.slotInterval).join();
@@ -586,15 +590,10 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         }
         found.dates = [...found.dates, ...newDates].sort();
         const unfit = findDateWithoutMeetingFit(found, newDates);
-        if (unfit) return reject(400, `${unfit} has no ${found.durationMinutes}-minute run of proposed times.`);
+        if (unfit) throw new RequestError(400, `${unfit} has no ${found.durationMinutes}-minute run of proposed times.`);
         return found;
       });
 
-      if (failure) {
-        const { status, error } = failure as { status: number; error: string };
-        res.status(status).json({ error });
-        return;
-      }
       if (!poll) {
         res.status(404).json({ error: "Poll not found" });
         return;
@@ -677,50 +676,37 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       const firstSaveHash = firstSaveCode ? hashCode(firstSaveCode) : undefined;
       const newParticipantId = newId("part");
 
-      // Set when the poll exists but the supplied participantId does not, so
-      // the 404 can say which of the two was missing.
-      let unknownParticipant = false;
-      let invalidSlot: string | undefined;
-      let failure: { status: number; error: string } | null = null;
+      // Set on the attempt that wrote, so the response is shaped for its caller.
       let isOrganizer = false;
 
       const outcome = await pollStore.update(req.params.id, (poll) => {
-        // Blob CAS may replay this closure. Never let an earlier attempt's
-        // diagnostic flags leak into the final response.
-        unknownParticipant = false;
-        invalidSlot = undefined;
-        failure = null;
-        const reject = (status: number, error: string) => {
-          failure = { status, error };
-          return null;
-        };
         isOrganizer = codeMatches(organizerCode, poll.organizerCodeHash);
-        if (poll.finalizedSlot) return reject(409, VOTING_CLOSED);
+        if (poll.finalizedSlot) throw new RequestError(409, VOTING_CLOSED);
 
         const proposed = new Set(poll.dates.flatMap((date) =>
           generateDaySlots(poll, date).map((time) => `${date}T${time}`)
         ));
-        invalidSlot = Object.keys(parsedAvailability.value).find((key) => !proposed.has(key));
-        if (invalidSlot) return null;
+        const invalidSlot = Object.keys(parsedAvailability.value).find((key) => !proposed.has(key));
+        if (invalidSlot) {
+          throw new RequestError(400, `availability slot ${invalidSlot} is outside the poll's proposed slots.`);
+        }
 
         // Updating needs the response's edit code (or the organizer code). There
         // is no name matching: without an id and code, a save is a new response.
         let existingIdx: number;
         if (participantId) {
           existingIdx = poll.participants.findIndex((p) => p.id === participantId);
-          if (existingIdx === -1) {
-            unknownParticipant = true;
-            return null;
-          }
+          // The poll exists but the response does not: say which was missing.
+          if (existingIdx === -1) throw new RequestError(404, "Participant not found");
           if (!isOrganizer && !codeMatches(editCode, poll.participants[existingIdx].editCodeHash)) {
-            return reject(403, "This response can only be changed from the browser that saved it.");
+            throw new RequestError(403, "This response can only be changed from the browser that saved it.");
           }
         } else {
           existingIdx = poll.participants.findIndex((p) => codeMatches(firstSaveCode, p.editCodeHash));
         }
 
         if (existingIdx === -1 && poll.participants.length >= MAX_PARTICIPANTS) {
-          return reject(409, `This poll has reached its limit of ${MAX_PARTICIPANTS} responses.`);
+          throw new RequestError(409, `This poll has reached its limit of ${MAX_PARTICIPANTS} responses.`);
         }
 
         const existing = existingIdx >= 0 ? poll.participants[existingIdx] : undefined;
@@ -745,19 +731,8 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return { poll, participant: responseEntry };
       });
 
-      if (failure) {
-        const { status, error } = failure as { status: number; error: string };
-        res.status(status).json({ error });
-        return;
-      }
-      if (invalidSlot) {
-        res.status(400).json({ error: `availability slot ${invalidSlot} is outside the poll's proposed slots.` });
-        return;
-      }
       if (!outcome) {
-        res
-          .status(404)
-          .json({ error: unknownParticipant ? "Participant not found" : "Poll not found" });
+        res.status(404).json({ error: "Poll not found" });
         return;
       }
       const publicPoll = toPublicPoll(outcome.poll, isOrganizer);
@@ -773,36 +748,20 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
   app.delete(
     "/api/polls/:id/respond/:participantId",
     wrap(async (req, res) => {
-      let unknownParticipant = false;
-      let forbidden = false;
       const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
       // Removing a response stays possible while voting is locked.
       const poll = await pollStore.update(req.params.id, (found) => {
-        unknownParticipant = false;
-        forbidden = false;
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) {
-          forbidden = true;
-          return null;
-        }
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
         const remaining = found.participants.filter((p) => p.id !== req.params.participantId);
         // Nothing removed means the id was never here: 404 without a write.
-        if (remaining.length === found.participants.length) {
-          unknownParticipant = true;
-          return null;
-        }
+        if (remaining.length === found.participants.length) throw new RequestError(404, "Participant not found");
         found.participants = remaining;
         return found;
       });
 
-      if (forbidden) {
-        res.status(403).json({ error: ORGANIZER_ONLY });
-        return;
-      }
       if (!poll) {
-        res
-          .status(404)
-          .json({ error: unknownParticipant ? "Participant not found" : "Poll not found" });
+        res.status(404).json({ error: "Poll not found" });
         return;
       }
       res.json(pollForClient(req, poll, true));
@@ -818,19 +777,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
 
       // Validation that needs the poll runs inside the mutation, so there is
       // exactly one lookup and one 404 path.
-      let failure: { status: number; error: string } | null = null;
       const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
       const poll = await pollStore.update(req.params.id, (found) => {
-        // Validation may run again after a CAS conflict.
-        failure = null;
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) {
-          failure = { status: 403, error: ORGANIZER_ONLY };
-          return null;
-        }
-        const reject = (error: string) => {
-          failure = { status: 400, error };
-          return null;
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+        const reject = (error: string): never => {
+          throw new RequestError(400, error);
         };
 
         if (!isCalendarDate(date)) {
@@ -865,8 +817,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           // Already applied, e.g. a CAS replay after this request's write committed.
           const locked = found.finalizedSlot;
           if (locked.date === date && locked.startTime === startTime && locked.endTime === endTime) return found;
-          failure = { status: 409, error: "Re-open voting before choosing another meeting time." };
-          return null;
+          throw new RequestError(409, "Re-open voting before choosing another meeting time.");
         }
 
         found.finalizedSlot = {
@@ -879,11 +830,6 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return found;
       });
 
-      if (failure) {
-        const { status, error } = failure as { status: number; error: string };
-        res.status(status).json({ error });
-        return;
-      }
       if (!poll) {
         res.status(404).json({ error: "Poll not found" });
         return;
@@ -896,21 +842,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
     "/api/polls/:id/reset",
     wrap(async (req, res) => {
       const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
-      let forbidden = false;
       const poll = await pollStore.update(req.params.id, (found) => {
-        forbidden = false;
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) {
-          forbidden = true;
-          return null;
-        }
+        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
         found.finalizedSlot = null;
         return found;
       });
 
-      if (forbidden) {
-        res.status(403).json({ error: ORGANIZER_ONLY });
-        return;
-      }
       if (!poll) {
         res.status(404).json({ error: "Poll not found" });
         return;
@@ -930,6 +867,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
     // Contention that outlasted the store's retries: the client may simply try again.
     if (err instanceof PollStoreConflictError) {
       res.status(409).json({ error: err.message, retryable: true });
+      return;
+    }
+    // A corrupt stored record: say so instead of a generic failure, and log the cause.
+    if (err instanceof PollUnreadableError) {
+      console.error("API error:", err, err.cause);
+      res.status(500).json({ error: err.message });
       return;
     }
     // Body-parser and friends tag their failures with a status (400, 413, ...).

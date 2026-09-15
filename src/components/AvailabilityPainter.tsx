@@ -41,13 +41,14 @@ interface AvailabilityPainterProps {
   /**
    * Saves the answer. `participantId` is set when updating this device's own
    * response; `options.asNew` asks to drop that stored response first. `email`
-   * is undefined when the field was empty all along, and "" when the user
-   * emptied a remembered email, so the stored one is cleared. Rejects with a
+   * is the field as shown, "" included: the server keeps a stored email only
+   * when the field is absent, and this device cannot see what the server
+   * stored, so an empty field always means "no email". Rejects with a
    * SaveAvailabilityError when the failure needs a specific next step.
    */
   onSaveAvailability: (
     name: string,
-    email: string | undefined,
+    email: string,
     availability: Record<string, SlotStatus>,
     participantId?: string,
     options?: { asNew?: boolean }
@@ -106,9 +107,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const loadedParticipantIdRef = useRef<string | undefined>(undefined);
   // The one pending timer: clearing the save error.
   const saveErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The email this device last remembered or saved. Emptying the field after
-  // that sends "" so the stored email is cleared, not kept.
-  const knownEmailRef = useRef(getStoredUser().email);
   // Brush buttons, for the roving tabindex.
   const brushRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Validation should return the user to the required identity field even
@@ -346,21 +344,19 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     const email = userEmail.trim();
     // An empty field clears the remembered email too.
     setStoredUser({ name: userName.trim(), email });
-    const emailToSend = email || knownEmailRef.current ? email : undefined;
 
     try {
       if (asNew) {
-        await onSaveAvailability(userName.trim(), emailToSend, availability, undefined, { asNew: true });
+        await onSaveAvailability(userName.trim(), email, availability, undefined, { asNew: true });
         loadedParticipantIdRef.current = undefined;
       } else {
-        await onSaveAvailability(userName.trim(), emailToSend, availability, ownParticipant?.id);
+        await onSaveAvailability(userName.trim(), email, availability, ownParticipant?.id);
       }
-      knownEmailRef.current = email;
       setSaveState('saved');
     } catch (error) {
       console.error(error);
       const kind = error instanceof SaveAvailabilityError ? error.kind : undefined;
-      if (kind === 'participant-gone' || (error instanceof Error && /participant not found/i.test(error.message))) {
+      if (kind === 'participant-gone') {
         // The response we were updating was removed meanwhile. The app forgets its
         // stored id, so the next save adds a new response.
         loadedParticipantIdRef.current = undefined;
@@ -533,6 +529,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
           </div>
           <p className="d-answer-grid-note">
             Select the times that work. Each cell follows the organizer's proposal.
+            Drag across cells to paint several at once; on a touchscreen, scroll the page from the time column or outside the grid.
           </p>
         </header>
         <TimeZoneNote timeZone={poll.timezone} dates={poll.dates} />

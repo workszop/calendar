@@ -86,6 +86,19 @@ describe('ExtendPollModal', () => {
     expect(onAddDates).toHaveBeenCalledWith([day(3)], { [day(3)]: ['10:00', '11:30'] });
   });
 
+  it('drafts a 15-minute poll at 15-minute steps, so its meeting fit can be met', async () => {
+    const onAddDates = openOn(makePoll({ slotInterval: 15, durationMinutes: 30, endHour: 11 }));
+    fireEvent.click(dateButton(day(3)));
+    const cells = [...document.querySelectorAll<HTMLElement>('[data-proposal-grid] [data-slot-key]')];
+    expect(cells.map((c) => c.dataset.time)).toEqual(['10:00', '10:15', '10:30', '10:45']);
+
+    // Two back-to-back quarter hours hold the 30-minute meeting.
+    propose(day(3), ['10:15', '10:30']);
+    submit();
+    await waitFor(() => expect(onAddDates).toHaveBeenCalled());
+    expect(onAddDates).toHaveBeenCalledWith([day(3)], { [day(3)]: ['10:15', '10:30'] });
+  });
+
   it('offers the full day, 00:00 to 24:00, and proposes an early hour', async () => {
     const onAddDates = openOn(makePoll());
     fireEvent.click(dateButton(day(3)));

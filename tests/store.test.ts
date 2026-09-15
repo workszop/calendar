@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Poll } from "../src/types";
 import {
   MAX_DESCRIPTION_LENGTH,
@@ -20,6 +20,7 @@ import {
   pollBytes,
   PollStoreConflictError,
   PollTooLargeError,
+  PollUnreadableError,
   type PollStore,
 } from "../server/poll-store";
 import { MemoryBlobClient } from "./memory-blob-client";
@@ -278,6 +279,24 @@ describe("file poll store", () => {
       .toEqual({ "2027-01-01T00:30": "preferred" });
   });
 
+  it("skips one unreadable entry, serves the rest, and writes the entry back untouched", async () => {
+    const filePath = tempFile();
+    const broken = { id: "poll_bad", title: "no participants array" };
+    fs.writeFileSync(filePath, JSON.stringify([makePoll("poll_a"), broken, makePoll("poll_b")]));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = createFilePollStore(filePath);
+
+    expect((await store.listIds()).sort()).toEqual(["poll_a", "poll_b"]);
+    expect((await store.getMany(["poll_a", "poll_bad", "poll_b"])).map((poll) => poll.id)).toEqual(["poll_a", "poll_b"]);
+    await expect(store.get("poll_bad")).resolves.toBeNull();
+    expect(errors).toHaveBeenCalledOnce();
+
+    await store.update("poll_a", (draft) => addParticipant(draft, "ada"));
+    const onDisk = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Array<{ id: string }>;
+    expect(onDisk.map((entry) => entry.id)).toEqual(["poll_a", "poll_b", "poll_bad"]);
+    expect(onDisk[2]).toEqual(broken);
+  });
+
   it("fails closed on malformed JSON and never replaces it with an empty array", async () => {
     const filePath = tempFile();
     const malformed = "{ definitely not an array";
@@ -362,18 +381,52 @@ describe("blob poll store", () => {
     const store = createBlobPollStore(client);
 
     const result = await store.importLegacyPolls!((poll) => poll.id !== "poll_drop");
-    expect(result).toEqual({ imported: 2, dropped: 1, skipped: 0 });
+    // poll_taken already had its own blob, so only poll_keep was written.
+    expect(result).toEqual({ imported: 1, dropped: 1, skipped: 0, remaining: 0 });
     expect(client.keys()).toEqual(["poll/poll_keep", "poll/poll_taken"]);
     expect((await store.get("poll_taken"))?.title).toBe("newer");
-    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 0, dropped: 0, skipped: 0 });
+    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 0, dropped: 0, skipped: 0, remaining: 0 });
   });
 
   it("skips and counts malformed legacy entries instead of giving up on the whole array", async () => {
     const client = new MemoryBlobClient();
     client.seed("polls", [makePoll("poll_a"), null, ["nope"], { id: 7 }, withSlots("poll_bad", { "2027-01-01": "zz" }), makePoll("poll_b")]);
     const store = createBlobPollStore(client);
-    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 2, dropped: 0, skipped: 4 });
+    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 2, dropped: 0, skipped: 4, remaining: 0 });
     expect(client.keys()).toEqual(["poll/poll_a", "poll/poll_b"]);
+  });
+
+  it("stops the import at its time budget, keeps the array for the next run, and finishes later", async () => {
+    const client = new MemoryBlobClient();
+    const ids = Array.from({ length: 12 }, (_, i) => `poll_${i}`);
+    client.seed("polls", ids.map(makePoll));
+    const store = createBlobPollStore(client, { concurrency: 1 });
+
+    let checks = 0;
+    const first = await store.importLegacyPolls!(() => true, { shouldStop: () => (checks += 1) > 5 });
+    expect(first).toEqual({ imported: 5, dropped: 0, skipped: 0, remaining: 7 });
+    expect(client.keys()).toContain("polls");
+    expect(client.keys().filter((key) => key.startsWith("poll/"))).toHaveLength(5);
+
+    // The next run skips the moved polls (onlyIfNew) and deletes the array once nothing is left.
+    const second = await store.importLegacyPolls!(() => true);
+    expect(second).toEqual({ imported: 7, dropped: 0, skipped: 0, remaining: 0 });
+    expect(client.keys()).toEqual(ids.map((id) => `poll/${id}`).sort());
+  });
+
+  it("leaves one corrupt blob out of a list read but still fails the single read", async () => {
+    const client = new MemoryBlobClient();
+    client.seed("poll/poll_bad", withSlots("poll_bad", { "2027-01-01": "zz" }));
+    const store = createBlobPollStore(client);
+    await Promise.all(["poll_a", "poll_b"].map((id) => store.create(makePoll(id))));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect((await store.getMany(["poll_a", "poll_bad", "poll_b"])).map((poll) => poll.id)).toEqual(["poll_a", "poll_b"]);
+    expect(errors).toHaveBeenCalledOnce();
+    await expect(store.get("poll_bad")).rejects.toBeInstanceOf(PollUnreadableError);
+    // A failing transport is not a corrupt record: the list fails as a whole.
+    client.readError = new Error("blob transport unavailable");
+    await expect(store.getMany(["poll_a"])).rejects.toThrow("blob transport unavailable");
   });
 
   it("does not resurrect a legacy poll deleted while the import runs", async () => {
@@ -391,7 +444,7 @@ describe("blob poll store", () => {
       }
       return result;
     };
-    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 1, dropped: 0, skipped: 0 });
+    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 1, dropped: 0, skipped: 0, remaining: 0 });
     client.getWithMetadata = read;
     await expect(store.get("poll_a")).resolves.toBeNull();
     expect(client.keys()).toEqual(["poll/poll_b"]);

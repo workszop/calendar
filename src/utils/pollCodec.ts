@@ -1,4 +1,6 @@
 import type { ParticipantResponse, Poll, SlotStatus } from '../types';
+import { hourToTimeStr } from './calendar';
+import { timeToMinutes } from './consensus';
 
 // ─── Availability codec ───
 // Availability is stored compactly, and sent compactly to clients that ask for
@@ -22,7 +24,7 @@ const NONE = '.';
 const SLOT_MINUTES = 15;
 const SLOTS_PER_DAY = (24 * 60) / SLOT_MINUTES;
 
-const KEY_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/;
+const KEY_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SLOTS_RE = new RegExp(`^[${NONE}${Object.values(STATUS_CHAR).join('')}]{1,${SLOTS_PER_DAY}}$`);
 
@@ -38,7 +40,7 @@ function encodeAvailability(availability: Record<string, SlotStatus>): Record<st
     const match = KEY_RE.exec(key);
     const char = STATUS_CHAR[status];
     if (!match || !char) return null;
-    const minutes = Number(match[2]) * 60 + Number(match[3]);
+    const minutes = timeToMinutes(match[2]);
     if (minutes % SLOT_MINUTES !== 0 || minutes >= 24 * 60) return null;
     const day = days.get(match[1]) ?? [];
     day[minutes / SLOT_MINUTES] = char;
@@ -62,9 +64,7 @@ function decodeSlots(slots: unknown): Record<string, SlotStatus> {
     }
     for (let index = 0; index < day.length; index += 1) {
       if (day[index] === NONE) continue;
-      const minutes = index * SLOT_MINUTES;
-      const time = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-      availability[`${date}T${time}`] = CHAR_STATUS[day[index]];
+      availability[`${date}T${hourToTimeStr((index * SLOT_MINUTES) / 60)}`] = CHAR_STATUS[day[index]];
     }
   }
   return availability;
@@ -83,13 +83,17 @@ export function encodePoll(poll: Poll): unknown {
   };
 }
 
-/** Reads a stored record in either format. Anything that is not a poll is corruption and throws. */
+/**
+ * Reads a stored record in either format. Anything that is not a poll with a
+ * participants array is corruption and throws: every poll has had one since
+ * the first version, and encodePoll relies on it.
+ */
 export function decodePoll(data: unknown): Poll {
   if (!data || typeof data !== 'object' || Array.isArray(data) || typeof (data as Poll).id !== 'string') {
     throw new Error('Record is not a poll.');
   }
   const record = data as Poll;
-  if (!Array.isArray(record.participants)) return record;
+  if (!Array.isArray(record.participants)) throw new Error('Poll record has no participants array.');
   return {
     ...record,
     participants: (record.participants as unknown[]).map((raw) => {

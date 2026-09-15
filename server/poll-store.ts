@@ -12,14 +12,15 @@ import { decodePoll, encodePoll } from "../src/utils/pollCodec";
  * Read-modify-write step for one poll. It receives a private draft and may
  * mutate it. Returning null or undefined means "do not write". The closure may
  * run more than once (compare-and-swap retries), so it must not keep side
- * effects from an earlier run.
+ * effects from an earlier run. An exception it throws aborts the update
+ * without a write and reaches the caller as is.
  */
 export type PollUpdater<T> = (draft: Poll) => T | null | undefined;
 
 export interface PollStore {
-  /** The poll, or null when it does not exist. */
+  /** The poll, or null when it does not exist. Rejects with PollUnreadableError when its record is corrupt. */
   get(id: string): Promise<Poll | null>;
-  /** Existing polls among `ids`, in the order asked for. Missing ids are skipped. */
+  /** Existing polls among `ids`, in the order asked for. Missing and unreadable ids are skipped. */
   getMany(ids: string[]): Promise<Poll[]>;
   /**
    * Stores a new poll. Resolves true when it is stored (including a replay of the
@@ -35,18 +36,28 @@ export interface PollStore {
   /**
    * Moves polls from a pre-per-poll storage layout into per-poll records, keeping
    * only those `keep` accepts, then deletes the old layout. Malformed old records
-   * are skipped and counted. Only stores that ever had another layout implement it.
+   * are skipped and counted. When `options.shouldStop` answers true the import
+   * stops taking new records, keeps the old layout for a later run and reports
+   * how many records it did not reach. Only stores that ever had another layout
+   * implement it.
    */
-  importLegacyPolls?(keep: (poll: Poll) => boolean): Promise<LegacyImportResult>;
+  importLegacyPolls?(keep: (poll: Poll) => boolean, options?: LegacyImportOptions): Promise<LegacyImportResult>;
+}
+
+export interface LegacyImportOptions {
+  /** Checked before each record; true stops the import early. */
+  shouldStop?: () => boolean;
 }
 
 export interface LegacyImportResult {
-  /** Polls now in their own record (written by this import). */
+  /** Polls written into their own record by this import. */
   imported: number;
   /** Polls `keep` rejected, or with an unusable id. */
   dropped: number;
   /** Old records that are not readable polls. */
   skipped: number;
+  /** Old records not reached before the import was stopped. */
+  remaining: number;
 }
 
 // ─── Store errors ───
@@ -77,16 +88,39 @@ export class PollTooLargeError extends Error {
   }
 }
 
+/** A stored record that is not a readable poll. The API answers 500 with this message. */
+export class PollUnreadableError extends Error {
+  readonly status = 500;
+  readonly statusCode = 500;
+  readonly pollId: string;
+
+  constructor(pollId: string, cause: unknown) {
+    super(`The stored record for poll ${pollId} is unreadable.`, { cause });
+    this.name = "PollUnreadableError";
+    this.pollId = pollId;
+  }
+}
+
 // ─── Shared checks ───
+
+/** Size in bytes of a poll already in the storage format, as compact JSON. */
+export function encodedPollBytes(encoded: unknown): number {
+  return Buffer.byteLength(JSON.stringify(encoded), "utf8");
+}
 
 /** Size of a poll in bytes as it is stored: compact JSON in the storage format. */
 export function pollBytes(poll: Poll): number {
-  return Buffer.byteLength(JSON.stringify(encodePoll(poll)), "utf8");
+  return encodedPollBytes(encodePoll(poll));
+}
+
+/** Throws PollTooLargeError when the encoded poll may not be stored. */
+export function assertEncodedPollSize(encoded: unknown): void {
+  if (encodedPollBytes(encoded) > MAX_POLL_BYTES) throw new PollTooLargeError();
 }
 
 /** Throws PollTooLargeError when the poll may not be stored. */
 export function assertPollSize(poll: Poll): void {
-  if (pollBytes(poll) > MAX_POLL_BYTES) throw new PollTooLargeError();
+  assertEncodedPollSize(encodePoll(poll));
 }
 
 /** Whether two polls store as the same record. */
@@ -99,9 +133,13 @@ export function isStorableId(id: string): boolean {
   return POLL_ID_RE.test(id);
 }
 
-/** A stored record, in either storage format, as a poll. Anything else is corruption and throws. */
-export function asStoredPoll(data: unknown): Poll {
-  return decodePoll(data);
+/** Decodes one stored record, naming the poll in the error when it is corrupt. */
+export function readStoredPoll(id: string, data: unknown): Poll {
+  try {
+    return decodePoll(data);
+  } catch (err) {
+    throw new PollUnreadableError(id, err);
+  }
 }
 
 // ─── File store (local server) ───
@@ -110,10 +148,12 @@ export function asStoredPoll(data: unknown): Poll {
  * One JSON array file behind the per-poll interface. Writes go through one
  * in-process queue, so concurrent requests never lose updates. The file stays
  * one array of polls; availability is written compactly (see src/utils/pollCodec) and
- * older verbose files keep working.
+ * older verbose files keep working. An entry that is not a readable poll is
+ * skipped by every read and written back untouched, so one corrupt record
+ * neither takes the other polls down nor gets silently dropped.
  */
 export function createFilePollStore(dataFile: string): PollStore {
-  let cache: Poll[] | null = null;
+  let cache: { polls: Poll[]; unreadable: unknown[] } | null = null;
   let cacheStamp = "";
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -132,7 +172,7 @@ export function createFilePollStore(dataFile: string): PollStore {
     }
   }
 
-  function readPolls(): Poll[] {
+  function readAll(): { polls: Poll[]; unreadable: unknown[] } {
     ensureDataFile();
     const stamp = diskStamp();
     if (cache && stamp === cacheStamp) return cache;
@@ -141,18 +181,31 @@ export function createFilePollStore(dataFile: string): PollStore {
     // shape check fails, no write can reach savePolls below.
     const parsed: unknown = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
     if (!Array.isArray(parsed)) throw new Error("Poll store must contain an array.");
-    cache = parsed.map(asStoredPoll);
+    const polls: Poll[] = [];
+    const unreadable: unknown[] = [];
+    parsed.forEach((entry, index) => {
+      try {
+        polls.push(decodePoll(entry));
+      } catch (err) {
+        unreadable.push(entry);
+        console.error(`Poll store: entry ${index} of ${dataFile} is not a readable poll; skipping it:`, err);
+      }
+    });
+    cache = { polls, unreadable };
     cacheStamp = stamp;
     return cache;
   }
 
+  const readPolls = () => readAll().polls;
+
   function savePolls(polls: Poll[]) {
     ensureDataFile();
+    const { unreadable } = readAll();
     const tempFile = `${dataFile}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(polls.map(encodePoll), null, 2), "utf-8");
+    fs.writeFileSync(tempFile, JSON.stringify([...polls.map(encodePoll), ...unreadable], null, 2), "utf-8");
     fs.renameSync(tempFile, dataFile);
     // Publish the new state only once it is durable on disk.
-    cache = polls;
+    cache = { polls, unreadable };
     cacheStamp = diskStamp();
   }
 

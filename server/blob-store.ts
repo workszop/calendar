@@ -1,17 +1,17 @@
 import type { Poll } from "../src/types";
-import { encodePoll } from "../src/utils/pollCodec";
+import { decodePoll, encodePoll } from "../src/utils/pollCodec";
 import {
-  asStoredPoll,
-  assertPollSize,
+  assertEncodedPollSize,
   isStorableId,
   PollStoreConflictError,
+  PollUnreadableError,
+  readStoredPoll,
   samePoll,
+  type LegacyImportOptions,
   type LegacyImportResult,
   type PollStore,
   type PollUpdater,
 } from "./poll-store";
-
-export { PollStoreConflictError } from "./poll-store";
 
 export interface BlobReadResult {
   data: unknown;
@@ -45,8 +45,8 @@ export interface BlobStoreOptions {
   backoffMs?: number;
   /** Longest single backoff delay. */
   maxBackoffMs?: number;
-  /** How long reads reuse one read of the legacy array, in ms. Writes always read it fresh. */
-  legacyCacheMs?: number;
+  /** Polls read at once by getMany and moved at once by the legacy import. */
+  concurrency?: number;
 }
 
 // ─── Keys ───
@@ -62,7 +62,7 @@ const READ_OPTIONS = { type: "json", consistency: "strong" } as const;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_BACKOFF_MS = 15;
 const DEFAULT_MAX_BACKOFF_MS = 400;
-const DEFAULT_LEGACY_CACHE_MS = 2000;
+const DEFAULT_CONCURRENCY = 8;
 
 const pollKey = (id: string) => `${KEY_PREFIX}${id}`;
 
@@ -79,33 +79,57 @@ function writeOutcome(write: BlobWriteResult): boolean {
   return write.modified;
 }
 
+/** Runs `task` over `items` with at most `limit` in flight, keeping result order. */
+async function mapLimit<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await task(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 export function createBlobPollStore(client: BlobClient, options: BlobStoreOptions = {}): PollStore {
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS;
   const maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
-  const legacyCacheMs = options.legacyCacheMs ?? DEFAULT_LEGACY_CACHE_MS;
+  const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
 
   /** Full jitter: a random delay up to an exponentially growing cap. */
   const backoff = (attempt: number) =>
     sleep(Math.random() * Math.min(maxBackoffMs, backoffMs * 2 ** attempt));
 
+  // Every read parses a fresh JSON document, so the decoded poll is handed out
+  // as is: no copy is needed to keep callers from touching stored state.
   async function read(id: string): Promise<{ poll: Poll; etag: string } | null> {
     const result = await client.getWithMetadata(pollKey(id), READ_OPTIONS);
     if (result === null) return null;
     if (typeof result.etag !== "string" || !result.etag) {
       throw new Error("Poll store returned an existing blob without an ETag.");
     }
-    return { poll: structuredClone(asStoredPoll(result.data)), etag: result.etag };
+    return { poll: readStoredPoll(id, result.data), etag: result.etag };
   }
 
   // ─── Legacy array ───
 
   type LegacySnapshot = { entries: unknown[]; etag: string };
 
+  /** Set once the array was seen missing: it never comes back, so reads stop asking. */
+  let legacyGone = false;
+
   /** Fresh read of the legacy array. A value that is not an array holds no usable polls. */
   async function readLegacy(): Promise<LegacySnapshot | null> {
+    if (legacyGone) return null;
     const result = await client.getWithMetadata(LEGACY_KEY, READ_OPTIONS);
-    if (result === null) return null;
+    if (result === null) {
+      legacyGone = true;
+      return null;
+    }
     if (!Array.isArray(result.data)) {
       console.error("Legacy poll array is not an array; ignoring it until cleanup reports it.");
       return null;
@@ -116,35 +140,8 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
     return { entries: result.data, etag: result.etag };
   }
 
-  let legacyCache: { at: number; value: Promise<LegacySnapshot | null> } | undefined;
-  /** Set once the array was seen missing: it never comes back, so reads stop asking. */
-  let legacyGone = false;
-
-  /** Legacy read shared by reads within `legacyCacheMs`, so a list request reads the array once. */
-  function cachedLegacy(): Promise<LegacySnapshot | null> {
-    const now = Date.now();
-    if (!legacyCache || now - legacyCache.at > legacyCacheMs) {
-      const value = readLegacy().then((snapshot) => {
-        if (snapshot === null) legacyGone = true;
-        return snapshot;
-      });
-      const entry = { at: now, value };
-      // A failed read is not reused.
-      value.catch(() => {
-        if (legacyCache === entry) legacyCache = undefined;
-      });
-      legacyCache = entry;
-    }
-    return legacyCache.value;
-  }
-
-  const forgetLegacy = () => {
-    legacyCache = undefined;
-  };
-
   /** Removes one poll from the legacy array with a conditional write. Resolves false if every attempt lost a race. */
   async function removeFromLegacy(id: string, attempts: number): Promise<boolean> {
-    forgetLegacy();
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (attempt > 0) await backoff(attempt);
       const legacy = await readLegacy();
@@ -157,29 +154,48 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
 
   // ─── Store ───
 
-  async function get(id: string): Promise<Poll | null> {
+  /**
+   * One poll: its own blob, else its legacy array copy. `legacy` supplies the
+   * array read, so a list request can share one read across its ids while a
+   * single read always sees the current array.
+   */
+  async function getWith(id: string, legacy: () => Promise<LegacySnapshot | null>): Promise<Poll | null> {
     if (!isStorableId(id)) return null;
-    const knownGone = legacyGone;
     const own = await read(id);
     if (own) return own.poll;
-    if (knownGone) return null;
 
-    const legacy = await cachedLegacy();
-    const raw = legacy?.entries.find((entry) => entryId(entry) === id);
-    if (raw !== undefined) return structuredClone(asStoredPoll(raw));
+    const snapshot = await legacy();
+    const raw = snapshot?.entries.find((entry) => entryId(entry) === id);
+    // The snapshot may be shared with other ids: give this caller its own copy.
+    if (raw !== undefined) return structuredClone(readStoredPoll(id, raw));
     // It may have moved out of the array between the two reads.
     return (await read(id))?.poll ?? null;
   }
 
+  const get = (id: string) => getWith(id, readLegacy);
+
   async function getMany(ids: string[]): Promise<Poll[]> {
-    const polls = await Promise.all(ids.map(get));
+    let shared: Promise<LegacySnapshot | null> | undefined;
+    const legacyOnce = () => (shared ??= readLegacy());
+    // One corrupt record must not hide the other polls in the list. A failing
+    // transport is a different matter and still fails the whole request.
+    const polls = await mapLimit(ids, concurrency, async (id) => {
+      try {
+        return await getWith(id, legacyOnce);
+      } catch (err) {
+        if (!(err instanceof PollUnreadableError)) throw err;
+        console.error(`Poll store: ${err.message} Leaving it out of the list:`, err.cause);
+        return null;
+      }
+    });
     return polls.filter((poll): poll is Poll => poll !== null);
   }
 
   async function create(poll: Poll): Promise<boolean> {
     if (!isStorableId(poll.id)) throw new Error("Poll id is not storable.");
-    assertPollSize(poll);
-    if (writeOutcome(await client.setJSON(pollKey(poll.id), encodePoll(poll), { onlyIfNew: true }))) return true;
+    const encoded = encodePoll(poll);
+    assertEncodedPollSize(encoded);
+    if (writeOutcome(await client.setJSON(pollKey(poll.id), encoded, { onlyIfNew: true }))) return true;
     // Either another poll owns the id, or this very write committed and only
     // its response was lost. The second case is a success.
     const existing = await read(poll.id);
@@ -207,19 +223,21 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
           if (await read(id)) continue;
           return null;
         }
-        draft = structuredClone(asStoredPoll(raw));
+        draft = readStoredPoll(id, raw);
         condition = { onlyIfNew: true };
       }
 
       const result = fn(draft);
       if (result === null || result === undefined) return null;
-      assertPollSize(draft);
+      // Encoded once per attempt: the size check and the write share it.
+      const encoded = encodePoll(draft);
+      assertEncodedPollSize(encoded);
 
       // A false `modified` is the only retryable outcome. Network and other
       // write exceptions deliberately propagate to the caller. If a move
       // committed but reported a conflict, the next attempt finds the blob
       // and replays the closure on it, like any other CAS replay.
-      if (!writeOutcome(await client.setJSON(pollKey(id), encodePoll(draft), condition))) continue;
+      if (!writeOutcome(await client.setJSON(pollKey(id), encoded, condition))) continue;
       if ("onlyIfNew" in condition) {
         // The blob now wins over the array copy. Losing this race is harmless:
         // the daily cleanup deletes the whole array.
@@ -245,33 +263,41 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
     return ids;
   }
 
-  async function importLegacyPolls(keep: (poll: Poll) => boolean): Promise<LegacyImportResult> {
+  async function importLegacyPolls(
+    keep: (poll: Poll) => boolean,
+    options: LegacyImportOptions = {}
+  ): Promise<LegacyImportResult> {
+    const shouldStop = options.shouldStop ?? (() => false);
     const legacy = await client.getWithMetadata(LEGACY_KEY, READ_OPTIONS);
-    if (legacy === null) return { imported: 0, dropped: 0, skipped: 0 };
+    if (legacy === null) return { imported: 0, dropped: 0, skipped: 0, remaining: 0 };
     if (!Array.isArray(legacy.data)) throw new Error("Legacy poll store must contain an array.");
 
-    let imported = 0;
-    let dropped = 0;
-    let skipped = 0;
+    const report: LegacyImportResult = { imported: 0, dropped: 0, skipped: 0, remaining: 0 };
     const written: string[] = [];
-    for (const raw of legacy.data) {
-      let poll: Poll;
-      try {
-        poll = asStoredPoll(raw);
-      } catch {
-        skipped += 1;
-        continue;
+    const queue = [...legacy.data];
+    const worker = async () => {
+      while (queue.length && !shouldStop()) {
+        const raw = queue.shift();
+        let poll: Poll;
+        try {
+          poll = decodePoll(raw);
+        } catch {
+          report.skipped += 1;
+          continue;
+        }
+        if (!isStorableId(poll.id) || !keep(poll)) {
+          report.dropped += 1;
+          continue;
+        }
+        // onlyIfNew: a poll already moved (or re-created since) is never overwritten.
+        if (writeOutcome(await client.setJSON(pollKey(poll.id), encodePoll(poll), { onlyIfNew: true }))) {
+          written.push(poll.id);
+          report.imported += 1;
+        }
       }
-      if (!isStorableId(poll.id) || !keep(poll)) {
-        dropped += 1;
-        continue;
-      }
-      // onlyIfNew: a poll already moved (or re-created since) is never overwritten.
-      if (writeOutcome(await client.setJSON(pollKey(poll.id), encodePoll(poll), { onlyIfNew: true }))) {
-        written.push(poll.id);
-      }
-      imported += 1;
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+    report.remaining = queue.length;
 
     // A poll deleted while this import ran is gone from the array by now; do
     // not bring it back. Without a readable array there is nothing to compare.
@@ -281,13 +307,13 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
         const remaining = new Set(fresh.data.map(entryId));
         for (const id of written.filter((id) => !remaining.has(id))) {
           await client.delete(pollKey(id));
-          imported -= 1;
+          report.imported -= 1;
         }
       }
     }
-    await client.delete(LEGACY_KEY);
-    forgetLegacy();
-    return { imported, dropped, skipped };
+    // Stopped early: the array stays for the next run, which skips moved polls via onlyIfNew.
+    if (report.remaining === 0) await client.delete(LEGACY_KEY);
+    return report;
   }
 
   return { get, getMany, create, update, delete: remove, listIds, importLegacyPolls };
