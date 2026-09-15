@@ -2,10 +2,12 @@ import type { Server } from "http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBlobPollStore } from "../server/blob-store";
 import { createApi } from "../server/api";
+import { hashCode } from "../server/auth";
 import { MemoryBlobClient } from "./memory-blob-client";
 
 // A date inside the API's one-year window, whenever the suite runs.
 const FUTURE_DATE = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+const LATER_DATE = new Date(Date.now() + 31 * 86_400_000).toISOString().slice(0, 10);
 
 const start = async (app: ReturnType<typeof createApi>) => {
   const server = await new Promise<Server>((resolve, reject) => {
@@ -139,6 +141,86 @@ describe("cloud PollStore API", () => {
     expect(saved.json.editCode).toMatch(/^[A-Za-z0-9_-]{32}$/);
     const stored = client.peek(`poll/${pollId}`) as { participants: unknown[] };
     expect(stored.participants).toHaveLength(1);
+  });
+
+  it("reports success when a committed add-dates write reports a conflict", async () => {
+    const client = new MemoryBlobClient();
+    const api = await start(createApi(createBlobPollStore(client, { backoffMs: 1 })));
+    openServers.push(api.server);
+    const created = await request(api.base, "POST", "/api/polls", createBody("Extended once"));
+    const pollId = created.json.id as string;
+    const organizer = { "X-Organizer-Code": created.json.organizerCode as string };
+
+    client.commitThenReportConflict = true;
+    const added = await request(api.base, "POST", `/api/polls/${pollId}/dates`, {
+      dates: [LATER_DATE], proposedSlots: { [LATER_DATE]: ["09:00", "09:30"] },
+    }, organizer);
+    expect(added.response.status).toBe(200);
+    expect(added.json.dates).toEqual([FUTURE_DATE, LATER_DATE]);
+    expect((client.peek(`poll/${pollId}`) as { dates: string[] }).dates).toEqual([FUTURE_DATE, LATER_DATE]);
+
+    // A different proposal for an existing date is still refused.
+    const clash = await request(api.base, "POST", `/api/polls/${pollId}/dates`, {
+      dates: [LATER_DATE], proposedSlots: { [LATER_DATE]: ["14:00", "14:30"] },
+    }, organizer);
+    expect(clash.response.status).toBe(400);
+    expect(clash.json.error).toMatch(/already one of the poll dates/);
+  });
+
+  it("reports success when a committed finalize write reports a conflict", async () => {
+    const client = new MemoryBlobClient();
+    const api = await start(createApi(createBlobPollStore(client, { backoffMs: 1 })));
+    openServers.push(api.server);
+    const created = await request(api.base, "POST", "/api/polls", createBody("Locked once"));
+    const pollId = created.json.id as string;
+    const organizer = { "X-Organizer-Code": created.json.organizerCode as string };
+
+    client.commitThenReportConflict = true;
+    const finalized = await request(api.base, "POST", `/api/polls/${pollId}/finalize`, {
+      date: FUTURE_DATE, startTime: "09:00", endTime: "09:30",
+    }, organizer);
+    expect(finalized.response.status).toBe(200);
+    expect(finalized.json.finalizedSlot).toMatchObject({ date: FUTURE_DATE, startTime: "09:00", endTime: "09:30" });
+
+    const other = await request(api.base, "POST", `/api/polls/${pollId}/finalize`, {
+      date: FUTURE_DATE, startTime: "10:00", endTime: "10:30",
+    }, organizer);
+    expect(other.response.status).toBe(409);
+  });
+
+  it("serves and answers a poll that is still in the legacy array, moving it on the first save", async () => {
+    const client = new MemoryBlobClient();
+    const organizerCode = "o".repeat(32);
+    const legacy = {
+      id: "poll_legacy", title: "Before the move", description: "", location: "Online Meeting",
+      durationMinutes: 30, timezone: "UTC", dates: [FUTURE_DATE], startHour: 9, endHour: 10, slotInterval: 30,
+      creatorName: "Ada", createdAt: "", finalizedSlot: null, organizerCodeHash: hashCode(organizerCode),
+      participants: [{ id: "part_old", name: "Old", timezone: "UTC", updatedAt: "", availability: { [`${FUTURE_DATE}T09:00`]: "available" } }],
+    };
+    client.seed("polls", [legacy, { ...legacy, id: "poll_ownerless", organizerCodeHash: undefined }]);
+    const api = await start(createApi(createBlobPollStore(client)));
+    openServers.push(api.server);
+
+    const loaded = await request(api.base, "GET", "/api/polls/poll_legacy");
+    expect(loaded.response.status).toBe(200);
+    expect(loaded.json.participants[0].availability).toEqual({ [`${FUTURE_DATE}T09:00`]: "available" });
+    expect((await request(api.base, "GET", "/api/polls/poll_ownerless")).response.status).toBe(404);
+    const listed = await request(api.base, "GET", "/api/polls?ids=poll_legacy,poll_ownerless");
+    expect(listed.json.map((poll: { id: string }) => poll.id)).toEqual(["poll_legacy"]);
+    const access = await request(api.base, "GET", "/api/polls/poll_legacy/access", undefined, { "X-Organizer-Code": organizerCode });
+    expect(access.json).toEqual({ organizer: true });
+
+    const saved = await request(api.base, "POST", "/api/polls/poll_legacy/respond", {
+      name: "New", availability: { [`${FUTURE_DATE}T09:30`]: "preferred" },
+    });
+    expect(saved.response.status).toBe(200);
+    expect(saved.json.poll.participants).toHaveLength(2);
+    expect(client.keys()).toEqual(["poll/poll_legacy", "polls"]);
+    expect((client.peek("polls") as Array<{ id: string }>).map((poll) => poll.id)).toEqual(["poll_ownerless"]);
+
+    const removed = await request(api.base, "DELETE", "/api/polls/poll_legacy", undefined, { "X-Organizer-Code": organizerCode });
+    expect(removed.response.status).toBe(200);
+    expect((await request(api.base, "GET", "/api/polls/poll_legacy")).response.status).toBe(404);
   });
 
   it("supports the full lifecycle through a blob-backed API", async () => {

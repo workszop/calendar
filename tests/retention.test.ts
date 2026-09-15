@@ -1,12 +1,14 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Poll } from '../src/types';
 import { createBlobPollStore } from '../server/blob-store';
-import { createFilePollStore } from '../server/poll-store';
+import { createFilePollStore, type PollStore } from '../server/poll-store';
 import {
   cleanupExpiredPolls,
+  DEFAULT_CLEANUP_BUDGET_MS,
+  formatCleanupReport,
   isLegacyPoll,
   isPollExpired,
   isPollRetired,
@@ -40,6 +42,10 @@ async function seededStore(polls: Poll[]) {
 }
 
 const at = (iso: string) => new Date(iso);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('poll retention rule', () => {
   it(`keeps a poll through ${RETENTION_DAYS} days after its last date, then expires it`, () => {
@@ -99,9 +105,9 @@ describe('retention store wrapper', () => {
 
   it('cleanup deletes expired polls and writes nothing when nothing expired', async () => {
     const { client, store } = await seededStore(seed);
-    expect(await cleanupExpiredPolls(store, clock)).toBe(1);
+    expect((await cleanupExpiredPolls(store, { clock })).removed).toBe(1);
     expect(client.keys()).toEqual(['poll/future', 'poll/recent']);
-    expect(await cleanupExpiredPolls(store, clock)).toBe(0);
+    expect((await cleanupExpiredPolls(store, { clock })).removed).toBe(0);
     expect(client.writeCalls).toHaveLength(0);
     expect(client.deleteCalls).toEqual(['poll/old']);
   });
@@ -113,8 +119,45 @@ describe('retention store wrapper', () => {
     client.seed('poll/stale', makePoll('stale', ['2026-01-01']));
     const store = createBlobPollStore(client);
 
-    expect(await cleanupExpiredPolls(store, clock)).toBe(3);
+    expect(await cleanupExpiredPolls(store, { clock })).toMatchObject({ removed: 3, imported: 1, skipped: 0, remaining: 0 });
     expect(client.keys()).toEqual(['poll/kept']);
+  });
+
+  it('hides expired and ownerless polls that are still in the legacy array', async () => {
+    const client = new MemoryBlobClient();
+    const ownerless = { ...makePoll('ownerless', ['2026-12-01']), organizerCodeHash: undefined };
+    client.seed('polls', [makePoll('old', ['2026-08-01']), makePoll('kept', ['2026-10-01']), ownerless]);
+    const wrapped = withRetention(createBlobPollStore(client), clock);
+    await expect(wrapped.get('old')).resolves.toBeNull();
+    await expect(wrapped.get('ownerless')).resolves.toBeNull();
+    expect((await wrapped.getMany(['old', 'kept', 'ownerless'])).map((p) => p.id)).toEqual(['kept']);
+    // A write aimed at a retired legacy poll removes it from the array too.
+    await expect(wrapped.update('ownerless', () => true)).resolves.toBeNull();
+    expect((client.peek('polls') as Poll[]).map((p) => p.id)).toEqual(['old', 'kept']);
+  });
+
+  it('cleanup still deletes expired polls when a legacy entry is malformed', async () => {
+    const client = new MemoryBlobClient();
+    client.seed('polls', [null, { id: 42 }, makePoll('legacy_old', ['2026-08-01']), makePoll('legacy_kept', ['2026-10-01'])]);
+    client.seed('poll/old', makePoll('old', ['2026-08-01']));
+    client.seed('poll/future', makePoll('future', ['2026-10-01']));
+    const report = await cleanupExpiredPolls(createBlobPollStore(client), { clock });
+    expect(report).toMatchObject({ removed: 2, imported: 1, skipped: 2, failed: 0, legacyFailed: false });
+    expect(client.keys()).toEqual(['poll/future', 'poll/legacy_kept']);
+  });
+
+  it('cleanup logs a failed legacy import and still sweeps every poll', async () => {
+    const client = new MemoryBlobClient();
+    client.seed('polls', { not: 'an array' });
+    client.seed('poll/old', makePoll('old', ['2026-08-01']));
+    client.seed('poll/corrupt', ['not', 'a poll']);
+    client.seed('poll/older', makePoll('older', ['2026-07-01']));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const report = await cleanupExpiredPolls(createBlobPollStore(client), { clock });
+    expect(report).toMatchObject({ removed: 2, failed: 1, legacyFailed: true, remaining: 0 });
+    expect(client.keys()).toEqual(['poll/corrupt', 'polls']);
+    expect(errors).toHaveBeenCalled();
+    expect(formatCleanupReport(report)).toMatch(/removed 2.*1 failed.*legacy import failed/);
   });
 
   it('cleanup works the same on the file store', async () => {
@@ -123,10 +166,10 @@ describe('retention store wrapper', () => {
       const file = path.join(dir, 'polls.json');
       fs.writeFileSync(file, JSON.stringify([...seed, { ...makePoll('legacy', ['2026-12-01']), organizerCodeHash: undefined }]));
       const store = createFilePollStore(file);
-      expect(await cleanupExpiredPolls(store, clock)).toBe(2);
+      expect((await cleanupExpiredPolls(store, { clock })).removed).toBe(2);
       expect((await store.listIds()).sort()).toEqual(['future', 'recent']);
       const before = fs.statSync(file).mtimeMs;
-      expect(await cleanupExpiredPolls(store, clock)).toBe(0);
+      expect((await cleanupExpiredPolls(store, { clock })).removed).toBe(0);
       expect(fs.statSync(file).mtimeMs).toBe(before);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -139,5 +182,74 @@ describe('legacy polls without an organizer code', () => {
     const legacy = { ...makePoll('legacy', ['2026-12-01']), organizerCodeHash: undefined };
     expect(isLegacyPoll(legacy)).toBe(true);
     expect(isLegacyPoll(makePoll('current', ['2026-12-01']))).toBe(false);
+  });
+});
+
+describe('cleanup at scale', () => {
+  const clock = () => at('2026-09-13T12:00:00Z');
+
+  /** Wraps a store so tests can watch how many reads run at once. */
+  function instrumented(store: PollStore, onGet: () => void = () => {}) {
+    let active = 0;
+    let peak = 0;
+    const wrapped: PollStore = {
+      ...store,
+      async get(id) {
+        active += 1;
+        peak = Math.max(peak, active);
+        onGet();
+        try {
+          return await store.get(id);
+        } finally {
+          active -= 1;
+        }
+      },
+    };
+    return { wrapped, peak: () => peak };
+  }
+
+  /** Small deterministic PRNG, so the sweep order is reproducible. */
+  const seeded = (seed: number) => () => {
+    seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31;
+    return seed / 2 ** 31;
+  };
+
+  it('sweeps with bounded parallelism', async () => {
+    const polls = Array.from({ length: 40 }, (_, i) => makePoll(`old_${i}`, ['2026-08-01']));
+    const { client, store } = await seededStore(polls);
+    const { wrapped, peak } = instrumented(store);
+    const report = await cleanupExpiredPolls(wrapped, { clock, concurrency: 10 });
+    expect(report).toMatchObject({ removed: 40, checked: 40, remaining: 0 });
+    expect(peak()).toBeGreaterThan(1);
+    expect(peak()).toBeLessThanOrEqual(10);
+    expect(client.keys()).toEqual([]);
+  });
+
+  it('stops before its time budget and reports how many polls were left', async () => {
+    const polls = Array.from({ length: 12 }, (_, i) => makePoll(`old_${i}`, ['2026-08-01']));
+    const { store } = await seededStore(polls);
+    let elapsed = 0;
+    const { wrapped } = instrumented(store, () => (elapsed += 1000));
+    const report = await cleanupExpiredPolls(wrapped, { clock, concurrency: 1, timeBudgetMs: 5000, now: () => elapsed });
+    expect(report).toMatchObject({ checked: 5, removed: 5, remaining: 7 });
+    expect(formatCleanupReport(report)).toMatch(/7 left for the next run/);
+    expect(DEFAULT_CLEANUP_BUDGET_MS).toBeLessThan(30_000);
+  });
+
+  it('visits polls in a fresh random order each run, so leftovers are reached on later runs', async () => {
+    // Listing order puts every live poll before the expired ones.
+    const live = Array.from({ length: 20 }, (_, i) => makePoll(`a_live_${String(i).padStart(2, '0')}`, ['2026-10-01']));
+    const expired = Array.from({ length: 5 }, (_, i) => makePoll(`z_old_${i}`, ['2026-08-01']));
+    const { client, store } = await seededStore([...live, ...expired]);
+    const random = seeded(7);
+    let runs = 0;
+    while (client.keys().some((key) => key.startsWith('poll/z_old')) && runs < 40) {
+      let elapsed = 0;
+      const { wrapped } = instrumented(store, () => (elapsed += 1000));
+      await cleanupExpiredPolls(wrapped, { clock, concurrency: 1, timeBudgetMs: 5000, now: () => elapsed, random });
+      runs += 1;
+    }
+    expect(client.keys().filter((key) => key.startsWith('poll/z_old'))).toEqual([]);
+    expect(client.keys()).toHaveLength(20);
   });
 });

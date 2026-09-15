@@ -12,6 +12,7 @@ import {
 } from "../src/utils/consensus";
 import { toPollSummary } from "../src/utils/pollSummary";
 import {
+  earliestPollDate,
   latestPollDate,
   MAX_AVAILABILITY_ENTRIES,
   MAX_BODY_SIZE,
@@ -43,7 +44,7 @@ import {
   type RateLimitConfig,
   type RateLimiter,
 } from "./rate-limit";
-import { isPollExpired, RETENTION_DAYS, withRetention, type Clock } from "./retention";
+import { withRetention, type Clock } from "./retention";
 
 // ─── Validation primitives ───
 
@@ -58,6 +59,16 @@ function isCalendarDate(value: unknown): value is string {
   if (typeof value !== "string" || !DATE_RE.test(value) || value.startsWith("0000")) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+/** A time zone name this runtime's Intl accepts, e.g. "Europe/Warsaw". */
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Absent (undefined/null) or a string. Anything else is a client mistake. */
@@ -363,6 +374,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
 
+      const timezone = optionalText(body.timezone);
+      if (timezone && !isTimeZone(timezone)) {
+        res.status(400).json({ error: "timezone must be a valid IANA time zone, e.g. Europe/Warsaw." });
+        return;
+      }
+
       const rawDates = body.dates as unknown[];
       const badDate = rawDates.find((d) => !isCalendarDate(d));
       if (badDate !== undefined) {
@@ -372,6 +389,11 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       const dates = [...new Set(rawDates as string[])].sort();
       if (dates.length > MAX_POLL_DATES) {
         res.status(400).json({ error: `A poll can have at most ${MAX_POLL_DATES} dates.` });
+        return;
+      }
+      const pastDate = dates.find((d) => d < earliestPollDate(clock()));
+      if (pastDate) {
+        res.status(400).json({ error: `${pastDate} is in the past.` });
         return;
       }
       const tooFar = dates.find((d) => d > latestPollDate(clock()));
@@ -445,7 +467,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         description: optionalText(body.description),
         location: optionalText(body.location, "Online Meeting"),
         durationMinutes: hasDuration ? (body.durationMinutes as number) : 30,
-        timezone: optionalText(body.timezone) || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        timezone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         dates,
         startHour,
         endHour,
@@ -459,14 +481,6 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         participants: [],
         organizerCodeHash: hashCode(organizerCode),
       };
-
-      // A poll that would be deleted immediately is almost certainly a mistake.
-      if (isPollExpired(newPoll, clock())) {
-        res.status(400).json({
-          error: `The last date is more than ${RETENTION_DAYS} days in the past; such polls are deleted automatically.`,
-        });
-        return;
-      }
 
       const unfit = findDateWithoutMeetingFit(newPoll, dates);
       if (unfit) {
@@ -505,10 +519,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
       const newDates = [...new Set(body.dates as string[])].sort();
-      // One day of slack: the browser's "today" may still be yesterday in UTC.
-      const earliest = new Date(clock());
-      earliest.setUTCDate(earliest.getUTCDate() - 1);
-      const pastDate = newDates.find((d) => d < earliest.toISOString().slice(0, 10));
+      const pastDate = newDates.find((d) => d < earliestPollDate(clock()));
       if (pastDate) {
         res.status(400).json({ error: `${pastDate} is in the past.` });
         return;
@@ -533,15 +544,20 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         if (found.finalizedSlot) {
           return reject(409, "Re-open voting before adding dates.");
         }
+        const parsed = parseProposedSlots(body.proposedSlots, newDates, found.slotInterval);
+        if (!parsed.ok) return reject(400, parsed.error);
+        if (!parsed.value) return reject(400, "proposedSlots is required: list the times for each new date.");
+        const added = parsed.value;
+        // Already applied, e.g. a CAS replay of this very request after its
+        // write committed: every date is there with exactly these times.
+        if (newDates.every((d) => found.dates.includes(d) && generateDaySlots(found, d).join() === added[d].join())) {
+          return found;
+        }
         const duplicate = newDates.find((d) => found.dates.includes(d));
         if (duplicate) return reject(400, `${duplicate} is already one of the poll dates.`);
         if (found.dates.length + newDates.length > MAX_POLL_DATES) {
           return reject(400, `A poll can have at most ${MAX_POLL_DATES} dates.`);
         }
-        const parsed = parseProposedSlots(body.proposedSlots, newDates, found.slotInterval);
-        if (!parsed.ok) return reject(400, parsed.error);
-        if (!parsed.value) return reject(400, "proposedSlots is required: list the times for each new date.");
-        const added = parsed.value;
 
         const defaultSlots = generateTimeSlots(found.startHour, found.endHour, found.slotInterval).join();
         const fitsWindow = newDates.every((d) => added[d].join() === defaultSlots);
@@ -833,6 +849,9 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           return reject("Choose a proposed start time and the poll's exact meeting duration.");
         }
         if (found.finalizedSlot) {
+          // Already applied, e.g. a CAS replay after this request's write committed.
+          const locked = found.finalizedSlot;
+          if (locked.date === date && locked.startTime === startTime && locked.endTime === endTime) return found;
           failure = { status: 409, error: "Re-open voting before choosing another meeting time." };
           return null;
         }

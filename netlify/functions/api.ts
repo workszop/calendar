@@ -1,15 +1,14 @@
 import { withLambda, type HandlerResponse } from '@netlify/aws-lambda-compat';
-import type { Config } from '@netlify/functions';
 import serverless from 'serverless-http';
 import { createApi } from '../../server/api';
 import { createNetlifyPollStore } from '../../server/netlify-store';
-import { createRateLimiter, netlifyClientIp } from '../../server/rate-limit';
+import { createRateLimiter, netlifyClientIp, rateLimitsFromEnv } from '../../server/rate-limit';
 
 const FUNCTION_PATH = '/.netlify/functions/api';
 
 // The app is rebuilt per request, but the limiter lives as long as this warm
 // instance, so per-IP counts survive between requests it serves.
-const rateLimiter = createRateLimiter();
+const rateLimiter = createRateLimiter(rateLimitsFromEnv());
 
 // The native runtime supplies Blobs credentials and its uncached endpoint.
 // Do not use legacy connectLambda: it discards the strong-read configuration.
@@ -30,12 +29,6 @@ export default withLambda(async (event, context): Promise<HandlerResponse> => {
   }
 });
 
-// Platform rate limit in front of every instance (all methods, per IP and site):
-// the in-memory limiter above cannot see other instances. Netlify caps windowSize at 180 s.
-export const config: Config = {
-  rateLimit: {
-    windowLimit: 300,
-    windowSize: 60,
-    aggregateBy: ['ip', 'domain'],
-  },
-};
+// The platform rate limit in front of every instance lives on the /api/* redirect
+// in netlify.toml: Netlify only applies a function's own `config.rateLimit`
+// together with a `path`, and this function is reached through that redirect.

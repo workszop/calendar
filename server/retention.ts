@@ -67,21 +67,122 @@ export function withRetention(store: PollStore, clock: Clock = () => new Date())
   };
 }
 
+// ─── Scheduled cleanup ───
+
+/** Polls checked at once by the sweep. */
+export const DEFAULT_CLEANUP_CONCURRENCY = 10;
 /**
- * Deletes retired polls now: imports any old-layout records worth keeping,
- * then sweeps every stored poll. Resolves with how many polls were removed.
+ * Time the sweep may spend before it stops taking new polls. Netlify stops a
+ * scheduled function after 30 seconds; this leaves room for the running reads,
+ * deletes and the log line.
  */
-export async function cleanupExpiredPolls(store: PollStore, clock: Clock = () => new Date()): Promise<number> {
-  let removed = 0;
-  if (store.importLegacyPolls) {
-    removed += (await store.importLegacyPolls((poll) => !isPollRetired(poll, clock()))).dropped;
+export const DEFAULT_CLEANUP_BUDGET_MS = 20_000;
+
+export interface CleanupOptions {
+  /** Calendar time for the retention rule. */
+  clock?: Clock;
+  /** Polls checked at once. */
+  concurrency?: number;
+  /** Stop taking new polls once this many ms have passed since the start. */
+  timeBudgetMs?: number;
+  /** Millisecond timer for the budget. */
+  now?: () => number;
+  /** Source of the random sweep order. */
+  random?: () => number;
+}
+
+export interface CleanupReport {
+  /** Polls deleted, including old-layout records not worth keeping. */
+  removed: number;
+  /** Polls moved out of the old layout. */
+  imported: number;
+  /** Old-layout records that were not readable polls. */
+  skipped: number;
+  /** Whether moving the old layout failed (the sweep still ran). */
+  legacyFailed: boolean;
+  /** Stored polls looked at by the sweep. */
+  checked: number;
+  /** Polls whose check or delete threw. */
+  failed: number;
+  /** Polls not reached before the time budget ran out. */
+  remaining: number;
+}
+
+/** One log line for a cleanup run. */
+export function formatCleanupReport(report: CleanupReport): string {
+  return [
+    `Poll cleanup: removed ${report.removed} poll(s) past ${RETENTION_DAYS} days after their last date or without an organizer code`,
+    `checked ${report.checked}`,
+    `moved ${report.imported} from the old layout`,
+    `skipped ${report.skipped} malformed old record(s)`,
+    ...(report.failed ? [`${report.failed} failed`] : []),
+    ...(report.legacyFailed ? ["legacy import failed"] : []),
+    ...(report.remaining ? [`${report.remaining} left for the next run`] : []),
+  ].join("; ");
+}
+
+/** Fisher-Yates shuffle into a new array. */
+function shuffled<T>(items: T[], random: () => number): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
   }
-  for (const id of await store.listIds()) {
-    const poll = await store.get(id);
-    if (poll && isPollRetired(poll, clock())) {
-      await store.delete(id);
-      removed += 1;
+  return result;
+}
+
+/**
+ * Deletes retired polls now: imports any old-layout records worth keeping, then
+ * sweeps every stored poll with bounded parallelism until the time budget runs
+ * out. Each run visits polls in a new random order, so polls a run did not reach
+ * get their turn on a later one. Failures are logged and counted, never thrown.
+ */
+export async function cleanupExpiredPolls(store: PollStore, options: CleanupOptions = {}): Promise<CleanupReport> {
+  const clock = options.clock ?? (() => new Date());
+  const now = options.now ?? Date.now;
+  const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CLEANUP_CONCURRENCY);
+  const timeBudgetMs = options.timeBudgetMs ?? DEFAULT_CLEANUP_BUDGET_MS;
+  const started = now();
+  const report: CleanupReport = {
+    removed: 0,
+    imported: 0,
+    skipped: 0,
+    legacyFailed: false,
+    checked: 0,
+    failed: 0,
+    remaining: 0,
+  };
+
+  if (store.importLegacyPolls) {
+    try {
+      const legacy = await store.importLegacyPolls((poll) => !isPollRetired(poll, clock()));
+      report.removed += legacy.dropped;
+      report.imported = legacy.imported;
+      report.skipped = legacy.skipped;
+    } catch (err) {
+      report.legacyFailed = true;
+      console.error("Poll cleanup: moving the old poll layout failed; sweeping per-poll records anyway:", err);
     }
   }
-  return removed;
+
+  const queue = shuffled(await store.listIds(), options.random ?? Math.random);
+  const worker = async () => {
+    while (queue.length && now() - started < timeBudgetMs) {
+      const id = queue.pop()!;
+      report.checked += 1;
+      try {
+        const poll = await store.get(id);
+        if (poll && isPollRetired(poll, clock())) {
+          await store.delete(id);
+          report.removed += 1;
+        }
+      } catch (err) {
+        report.failed += 1;
+        console.error(`Poll cleanup: checking ${id} failed:`, err);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  report.remaining = queue.length;
+  return report;
 }
