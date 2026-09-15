@@ -202,4 +202,41 @@ describe('ExtendPollModal', () => {
     fireEvent.keyDown(firstDestination, { key: 'Tab' });
     expect(copyDialog.contains(document.activeElement)).toBe(true);
   });
+
+  it('focuses the first validation error after a submit, then the server error', async () => {
+    const onAddDates = vi.fn().mockRejectedValue(new Error('Too many requests. Try again in a minute.'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    openOn(makePoll({ durationMinutes: 60 }), onAddDates);
+
+    submit();
+    await waitFor(() => expect(document.activeElement?.id).toBe('extend-dates-error'));
+
+    fireEvent.click(dateButton(day(3)));
+    propose(day(3), ['10:00']);
+    submit();
+    await waitFor(() => expect(document.activeElement?.id).toBe('extend-start-hour'));
+
+    propose(day(3), ['10:30']);
+    submit();
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-extend-error')).toBe('submit'));
+    expect(document.activeElement?.textContent).toBe('Too many requests. Try again in a minute.');
+  });
+
+  it('makes the Add dates dialog inert while the nested copy dialog is open, and restores it', async () => {
+    openOn(makePoll());
+    [3, 4].forEach((offset) => fireEvent.click(dateButton(day(offset))));
+    const outer = screen.getByRole('dialog', { name: 'Add Dates' });
+    const copyButton = document.querySelector<HTMLButtonElement>(`[data-copy-source-date="${day(3)}"]`)!;
+    copyButton.focus();
+    fireEvent.click(copyButton);
+
+    const copyDialog = screen.getByRole('dialog', { name: 'Copy times to…' });
+    expect(outer.closest('[data-modal-scrim]')?.hasAttribute('inert')).toBe(true);
+    expect(copyDialog.closest('[data-modal-scrim]')?.hasAttribute('inert')).toBe(false);
+
+    fireEvent.keyDown(within(copyDialog).getAllByRole('checkbox')[0], { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Copy times to…' })).toBeNull();
+    expect(outer.closest('[data-modal-scrim]')?.hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(copyButton);
+  });
 });

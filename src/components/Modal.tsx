@@ -28,6 +28,8 @@ const FOCUSABLE = [
 ].join(',');
 
 const CLOSE_BUTTON_ATTR = 'data-modal-close';
+/** Marks each open dialog's scrim, so a nested dialog can make the outer one inert. */
+const SCRIM_ATTR = 'data-modal-scrim';
 
 /**
  * Accessible dialog: focus trap, Escape to close, focus restore, scroll lock.
@@ -46,6 +48,7 @@ export const Modal: React.FC<ModalProps> = ({
   dismissOnBackdrop = true,
 }) => {
   const titleId = useId();
+  const scrimRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
 
@@ -65,6 +68,12 @@ export const Modal: React.FC<ModalProps> = ({
     const root = document.getElementById('root');
     const hadInert = root?.hasAttribute('inert') ?? true;
     if (root && !hadInert) root.setAttribute('inert', '');
+    // A dialog opened from inside another one (both portaled on <body>) hides
+    // the outer dialog too, so neither pointer nor Tab can reach it.
+    const outerScrims = Array.from(document.querySelectorAll<HTMLElement>(`[${SCRIM_ATTR}]`)).filter(
+      (scrim) => scrim !== scrimRef.current && !scrim.hasAttribute('inert')
+    );
+    outerScrims.forEach((scrim) => scrim.setAttribute('inert', ''));
 
     const panel = panelRef.current;
     if (panel) {
@@ -77,6 +86,7 @@ export const Modal: React.FC<ModalProps> = ({
 
     return () => {
       if (root && !hadInert) root.removeAttribute('inert');
+      outerScrims.forEach((scrim) => scrim.removeAttribute('inert'));
       previouslyFocused.current?.focus?.();
     };
   }, [isOpen, focusableIn, initialFocusRef]);
@@ -127,6 +137,8 @@ export const Modal: React.FC<ModalProps> = ({
 
   return createPortal(
     <div
+      ref={scrimRef}
+      {...{ [SCRIM_ATTR]: '' }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 edu-scrim"
       onMouseDown={(e) => {
         if (dismissOnBackdrop && e.target === e.currentTarget) onClose();

@@ -31,7 +31,12 @@ import {
   setStoredResponse,
   touchPoll,
 } from './utils/storage';
-import { OrganizerCodePanel, takeOrganizerCodeFromUrl, UnlockOrganizerForm } from './components/OrganizerAccess';
+import {
+  clearOrganizerCodeFromUrl,
+  OrganizerCodePanel,
+  readOrganizerCodeFromUrl,
+  UnlockOrganizerForm,
+} from './components/OrganizerAccess';
 import type { GridInterval } from './utils/grid';
 import { TOAST_MS } from './utils/constants';
 import { POLL_ID_RE } from './utils/limits';
@@ -43,6 +48,12 @@ type ActiveTab = 'overview' | 'answer';
 /** Organizer status of the open poll, as last verified by the server. */
 type OrganizerState = 'unknown' | 'organizer' | 'visitor';
 type AppScreen = 'home' | 'workspace' | 'create' | 'created';
+/** Why the open poll could not be shown; published as data-poll-error. */
+type PollErrorKind = 'not-found' | 'rate-limited' | 'other';
+interface PollError {
+  kind: PollErrorKind;
+  message: string;
+}
 type AppRoute =
   | { kind: 'home' }
   | { kind: 'poll'; id: string }
@@ -70,6 +81,10 @@ class ApiError extends Error {
     this.status = status;
   }
 }
+/** A deleted poll already shows its own error screen, so it is not toasted too. */
+function isPollGoneError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && err.message === POLL_GONE_MESSAGE;
+}
 async function readError(res: Response, fallback: string): Promise<ApiError> {
   try {
     const body: unknown = await res.json();
@@ -86,6 +101,8 @@ async function readError(res: Response, fallback: string): Promise<ApiError> {
 /** Retry timing for storage conflicts. Tests set baseDelayMs to 0. */
 export const apiRetry = { attempts: 3, baseDelayMs: 150 };
 const RATE_LIMIT_MESSAGE = 'Too many requests. Please wait a moment and try again.';
+const POLL_GONE_MESSAGE = 'This poll no longer exists. It may have been deleted.';
+const OFFLINE_MESSAGE = 'Check your connection and try again.';
 
 async function isRetryableConflict(res: Response): Promise<boolean> {
   if (res.status !== 409) return false;
@@ -110,15 +127,23 @@ export async function fetchWithRetry(input: string, init?: RequestInit): Promise
   }
 }
 
-/** Asks the server whether a code unlocks a poll; null when it could not be checked. */
-async function checkOrganizerCode(pollId: string, code: string, signal?: AbortSignal): Promise<boolean | null> {
+/**
+ * The server's verdict on an organizer code. `organizer` is null when the code
+ * could not be checked (network error, 429, 5xx); `message` then says why.
+ */
+type AccessCheck = { organizer: boolean } | { organizer: null; status: number | null; message: string };
+
+async function checkOrganizerCode(pollId: string, code: string, signal?: AbortSignal): Promise<AccessCheck> {
   try {
     const res = await fetch(pollPath(pollId, '/access'), { headers: { 'X-Organizer-Code': code }, signal });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const fallback = res.status === 429 ? RATE_LIMIT_MESSAGE : 'Please try again.';
+      return { organizer: null, status: res.status, message: (await readError(res, fallback)).message };
+    }
     const body: unknown = await res.json();
-    return (body as { organizer?: unknown } | null)?.organizer === true;
+    return { organizer: (body as { organizer?: unknown } | null)?.organizer === true };
   } catch {
-    return null;
+    return { organizer: null, status: null, message: OFFLINE_MESSAGE };
   }
 }
 
@@ -162,7 +187,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [gridInterval, setGridInterval] = useState<GridInterval>(getStoredGridInterval);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PollError | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [createdPoll, setCreatedPoll] = useState<Poll | null>(null);
@@ -185,6 +210,9 @@ export default function App() {
   // arrives a stored code counts as 'unknown' and organizer tools stay hidden.
   const [organizerCheck, setOrganizerCheck] = useState<{ pollId: string; state: OrganizerState } | null>(null);
   const [organizerNotice, setOrganizerNotice] = useState<string | null>(null);
+  // An organizer link whose code could not be checked yet: its fragment stays in the URL.
+  const [linkCheck, setLinkCheck] = useState<{ pollId: string; message: string } | null>(null);
+  const [isFinalizing, setIsFinalizing] = useState(false);
 
   // ─── Refs ───
   const didInit = useRef(false);
@@ -201,6 +229,9 @@ export default function App() {
   const isCreatingRef = useRef(false);
   const createRouteRef = useRef<string | null>(null);
   const manageDisclosureRef = useRef<HTMLDetailsElement | null>(null);
+  const finalizingRef = useRef(false);
+  // Set when a 403 removed the control that had focus: focus moves to the unlock form.
+  const focusUnlockRef = useRef(false);
 
   // ─── Async navigation ───
 
@@ -210,12 +241,17 @@ export default function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), TOAST_MS);
   }, []);
 
-  /** fetchWithRetry plus a toast carrying the server's message on 429. */
-  const callApi = useCallback(async (input: string, init?: RequestInit): Promise<Response> => {
-    const res = await fetchWithRetry(input, init);
-    if (res.status === 429) showToast((await readError(res.clone(), RATE_LIMIT_MESSAGE)).message);
-    return res;
-  }, [showToast]);
+  // A 404 from the poll itself means it was deleted: forget its codes and say so.
+  const handlePollGone = useCallback((pollId: string) => {
+    forgetPoll(pollId);
+    setAccessVersion((version) => version + 1);
+    if (activePollIdRef.current !== pollId) return;
+    setIsExtendModalOpen(false);
+    setIsShareModalOpen(false);
+    setPendingDelete(null);
+    setActivePoll(null);
+    setError({ kind: 'not-found', message: POLL_GONE_MESSAGE });
+  }, []);
 
   // A 403 from an organizer route means the stored code no longer unlocks the
   // poll: drop it and bring the unlock form back.
@@ -227,14 +263,20 @@ export default function App() {
     setOrganizerNotice(message);
     setIsExtendModalOpen(false);
     if (manageDisclosureRef.current) manageDisclosureRef.current.open = true;
+    // The control that failed (e.g. Add dates) is gone now; do not let focus drop.
+    focusUnlockRef.current = true;
   }, []);
 
-  /** Reads a failed organizer action's error, handling a 403 on the way. */
+  /** Reads a failed organizer action's error, handling a 403 or a deleted poll on the way. */
   const organizerFailure = useCallback(async (res: Response, pollId: string, fallback: string) => {
-    const failure = await readError(res, fallback);
+    const failure = await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : fallback);
     if (res.status === 403) handleOrganizerForbidden(pollId, failure.message);
+    if (res.status === 404 && !/participant not found/i.test(failure.message)) {
+      handlePollGone(pollId);
+      return new ApiError(404, POLL_GONE_MESSAGE);
+    }
     return failure;
-  }, [handleOrganizerForbidden]);
+  }, [handleOrganizerForbidden, handlePollGone]);
 
   useEffect(() => {
     return () => {
@@ -279,6 +321,8 @@ export default function App() {
     if (currentPoll === nextPoll && currentCreate === nextCreate && currentCreated === nextCreated) {
       return;
     }
+    // An organizer link's fragment belongs to its poll only.
+    if (nextPoll !== currentPoll) url.hash = '';
     url.searchParams.delete('poll');
     url.searchParams.delete('create');
     url.searchParams.delete('created');
@@ -302,10 +346,8 @@ export default function App() {
         const body: unknown = await res.json();
         if (!Array.isArray(body)) throw new Error('Failed to fetch polls');
         const byId = new Map((body as PollSummary[]).map((item) => [item.id, item]));
-        // An id the server left out no longer exists: forget its codes.
-        const missing = ids.filter((id) => !byId.has(id));
-        missing.forEach(forgetPoll);
-        if (missing.length > 0) setAccessVersion((version) => version + 1);
+        // An id the server left out is simply not listed. Its codes are forgotten
+        // only once the poll's own detail request answers 404.
         // Render in this device's recency order, newest first.
         data = ids.flatMap((id) => byId.get(id) ?? []);
       }
@@ -334,40 +376,51 @@ export default function App() {
       setActivePoll(null);
       setOrganizerCheck(null);
       setOrganizerNotice(null);
+      setLinkCheck(null);
       setScreen('workspace');
       try {
         // A malformed id (e.g. "?poll=.") would hit another route; treat it as missing.
-        if (!POLL_ID_RE.test(pollId)) throw new Error('Poll not found');
+        if (!POLL_ID_RE.test(pollId)) throw new ApiError(404, 'Poll not found');
         // A code from an organizer link is kept only once the server accepts it,
-        // so a crafted link can never replace a working stored code.
+        // so a crafted link can never replace a working stored code. Its fragment
+        // leaves the URL only after a definite answer, so a reload can retry.
         let linkVerified = false;
-        if (linkCode && linkCode !== getOrganizerCode(pollId)) {
-          const accepted = await checkOrganizerCode(pollId, linkCode, controller.signal);
+        let linkUnchecked: string | null = null;
+        const linkIsStored = Boolean(linkCode) && linkCode === getOrganizerCode(pollId);
+        if (linkCode && !linkIsStored) {
+          const access = await checkOrganizerCode(pollId, linkCode, controller.signal);
           if (requestId !== navigationRequestRef.current) return;
-          if (accepted) {
+          if (access.organizer === null) {
+            // A 404 is answered by the poll request below.
+            if (access.status !== 404) linkUnchecked = access.message;
+          } else if (access.organizer) {
             setOrganizerCode(pollId, linkCode);
             touchPoll(pollId);
             setAccessVersion((version) => version + 1);
+            clearOrganizerCodeFromUrl();
             linkVerified = true;
           } else {
-            showToast(accepted === false ? 'That organizer link does not match this poll.' : 'Could not check the organizer link.');
+            clearOrganizerCodeFromUrl();
+            showToast('That organizer link does not match this poll.');
           }
         }
         // A stored code is verified once per load, alongside the poll itself.
         const storedCode = getOrganizerCode(pollId);
-        const accessCheck: Promise<boolean | null> = !storedCode
-          ? Promise.resolve(false)
+        const accessCheck: Promise<AccessCheck> = !storedCode
+          ? Promise.resolve({ organizer: false })
           : linkVerified
-            ? Promise.resolve(true)
+            ? Promise.resolve({ organizer: true })
             : checkOrganizerCode(pollId, storedCode, controller.signal);
         const res = await fetch(pollPath(pollId), { signal: controller.signal, headers: organizerHeaders(pollId) });
         if (!res.ok) {
-          const failure = await readError(res, 'Poll not found');
           if (res.status === 404) {
             forgetPoll(pollId);
             setAccessVersion((version) => version + 1);
+            if (linkCode) clearOrganizerCodeFromUrl();
+            throw new ApiError(404, POLL_GONE_MESSAGE);
           }
-          throw failure;
+          // 429 and 5xx are temporary: never "not found", never a reason to forget.
+          throw await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to load poll');
         }
         const data: unknown = await res.json();
         if (!isPollShape(data) || data.id !== pollId) throw new Error('Poll not found');
@@ -375,10 +428,16 @@ export default function App() {
         commitActivePoll(data);
         setPainterKey((key) => key + 1);
         syncRoute({ kind: 'poll', id: pollId }, historyMode);
+        if (linkUnchecked) setLinkCheck({ pollId, message: linkUnchecked });
         // Show the poll now; organizer tools appear once the check answers.
         setLoading(false);
-        const organizer = await accessCheck;
+        const storedAccess = await accessCheck;
+        const organizer = storedAccess.organizer;
         if (requestId !== navigationRequestRef.current || !storedCode) return;
+        if (linkIsStored) {
+          if (storedAccess.organizer === null) setLinkCheck({ pollId, message: storedAccess.message });
+          else clearOrganizerCodeFromUrl();
+        }
         if (organizer === false) {
           // The server says this code does not unlock the poll: it is stale.
           removeOrganizerCode(pollId);
@@ -391,7 +450,11 @@ export default function App() {
         }
       } catch (err) {
         if (requestId !== navigationRequestRef.current || controller.signal.aborted) return;
-        setError(errorMessage(err, 'Failed to load poll'));
+        const status = err instanceof ApiError ? err.status : 0;
+        setError({
+          kind: status === 404 ? 'not-found' : status === 429 ? 'rate-limited' : 'other',
+          message: errorMessage(err, 'Failed to load poll'),
+        });
       } finally {
         if (requestId === navigationRequestRef.current) setLoading(false);
       }
@@ -406,9 +469,9 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const pollParam = params.get('poll');
       if (pollParam) {
-        // An organizer link carries the code in the fragment: keep it, then drop it from the URL.
-        // fetchPoll keeps it only after the server has verified it.
-        const linkCode = takeOrganizerCodeFromUrl();
+        // An organizer link carries the code in the fragment. fetchPoll stores it
+        // only after the server has verified it, and drops the fragment then.
+        const linkCode = readOrganizerCodeFromUrl();
         // Only a freshly opened shared link lands on the answer tab; Back/Forward
         // leaves the current tab alone.
         if (isInitialLoad) setActiveTab('answer');
@@ -491,6 +554,15 @@ export default function App() {
     [beginNavigation, fetchPollsList, showToast, syncRoute]
   );
 
+  // After a 403 the unlock form replaces the control that had focus.
+  useEffect(() => {
+    if (!focusUnlockRef.current) return;
+    const input = document.getElementById('organizer-unlock-code');
+    if (!input) return;
+    focusUnlockRef.current = false;
+    input.focus();
+  }, [organizerCheck, isExtendModalOpen]);
+
   useEffect(() => {
     if (activeTab !== 'overview' || !focusOverviewTabRef.current) return;
     focusOverviewTabRef.current = false;
@@ -501,7 +573,7 @@ export default function App() {
 
   const handleSaveAvailability = async (
     name: string,
-    email: string,
+    email: string | undefined,
     availability: Record<string, SlotStatus>,
     participantId?: string,
     options?: { asNew?: boolean }
@@ -524,7 +596,8 @@ export default function App() {
       editCode = getPendingEditCode(pollId) ?? generateEditCode();
       setPendingEditCode(pollId, editCode);
     }
-    const res = await callApi(pollPath(pollId, '/respond'), {
+    // The painter shows its own inline error, so a 429 is not toasted as well.
+    const res = await fetchWithRetry(pollPath(pollId, '/respond'), {
       method: 'POST',
       headers: {
         ...JSON_HEADERS,
@@ -533,15 +606,15 @@ export default function App() {
       },
       body: JSON.stringify({
         name,
-        // An empty field on an update keeps the stored email instead of wiping it.
-        ...(participantId && !email ? {} : { email }),
+        // Absent keeps the stored email; "" (a field the user emptied) clears it.
+        ...(email === undefined ? {} : { email }),
         timezone: BROWSER_TIMEZONE,
         availability,
         participantId,
       }),
     });
     if (!res.ok) {
-      const failure = await readError(res, 'Failed to save response');
+      const failure = await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to save response');
       if (res.status === 404 && /participant not found/i.test(failure.message)) {
         removeStoredResponse(pollId);
         setAccessVersion((version) => version + 1);
@@ -550,6 +623,7 @@ export default function App() {
       if (res.status === 404) {
         forgetPoll(pollId);
         setAccessVersion((version) => version + 1);
+        throw new SaveAvailabilityError('other', POLL_GONE_MESSAGE);
       }
       if (res.status === 403 && participantId) {
         // This browser's edit code no longer matches: it is useless from now on.
@@ -594,7 +668,7 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await callApi(pollPath(pollId, `/respond/${encodeURIComponent(target.id)}`), {
+      const res = await fetchWithRetry(pollPath(pollId, `/respond/${encodeURIComponent(target.id)}`), {
         method: 'DELETE',
         headers: organizerHeaders(pollId),
       });
@@ -606,7 +680,7 @@ export default function App() {
       if (activeParticipantFilter === target.id) setActiveParticipantFilter(null);
       showToast(`Removed ${target.name}'s response`);
     } catch (err) {
-      showToast(errorMessage(err, 'Error removing response'));
+      if (!isPollGoneError(err)) showToast(errorMessage(err, 'Error removing response'));
     }
   };
 
@@ -615,7 +689,7 @@ export default function App() {
     setPendingPollDelete(null);
     if (!target) return;
     try {
-      const res = await callApi(pollPath(target.id), { method: 'DELETE', headers: organizerHeaders(target.id) });
+      const res = await fetchWithRetry(pollPath(target.id), { method: 'DELETE', headers: organizerHeaders(target.id) });
       // 404: someone already deleted it, which is the outcome asked for.
       if (!res.ok && res.status !== 404) throw await organizerFailure(res, target.id, 'Failed to delete poll');
       forgetPoll(target.id);
@@ -632,7 +706,8 @@ export default function App() {
     if (!activePoll) return;
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
-    const res = await callApi(pollPath(pollId, '/dates'), {
+    // The Add dates dialog shows failures inline, so nothing is toasted here.
+    const res = await fetchWithRetry(pollPath(pollId, '/dates'), {
       method: 'POST',
       headers: { ...JSON_HEADERS, ...organizerHeaders(pollId) },
       body: JSON.stringify({ dates, proposedSlots }),
@@ -647,10 +722,14 @@ export default function App() {
 
   const handleFinalizeSlot = async (date: string, startTime: string, endTime: string) => {
     if (!activePoll || activePoll.finalizedSlot || activePoll.participants.length === 0) return;
+    // One lock request at a time: a double click must not send two.
+    if (finalizingRef.current) return;
+    finalizingRef.current = true;
+    setIsFinalizing(true);
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await callApi(pollPath(pollId, '/finalize'), {
+      const res = await fetchWithRetry(pollPath(pollId, '/finalize'), {
         method: 'POST',
         headers: { ...JSON_HEADERS, ...organizerHeaders(pollId) },
         body: JSON.stringify({
@@ -668,7 +747,10 @@ export default function App() {
       showToast('Meeting time locked');
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: EDULAB_CONFETTI });
     } catch (err) {
-      showToast(errorMessage(err, 'Error locking time'));
+      if (!isPollGoneError(err)) showToast(errorMessage(err, 'Error locking time'));
+    } finally {
+      finalizingRef.current = false;
+      setIsFinalizing(false);
     }
   };
 
@@ -677,7 +759,7 @@ export default function App() {
     const pollId = activePoll.id;
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await callApi(pollPath(pollId, '/reset'), { method: 'POST', headers: organizerHeaders(pollId) });
+      const res = await fetchWithRetry(pollPath(pollId, '/reset'), { method: 'POST', headers: organizerHeaders(pollId) });
       if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to reset finalized time');
       const updated: Poll = await res.json();
       void fetchPollsList();
@@ -685,7 +767,7 @@ export default function App() {
       commitActivePoll(updated);
       showToast('Voting re-opened');
     } catch (err) {
-      showToast(errorMessage(err, 'Error resetting time'));
+      if (!isPollGoneError(err)) showToast(errorMessage(err, 'Error resetting time'));
     }
   };
 
@@ -694,12 +776,13 @@ export default function App() {
   const handleCreatePoll = async (pollData: Partial<Poll>) => {
     const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await callApi('/api/polls', {
+      // The create page shows failures inline, so nothing is toasted here.
+      const res = await fetchWithRetry('/api/polls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pollData),
       });
-      if (!res.ok) throw await readError(res, 'Failed to create poll');
+      if (!res.ok) throw await readError(res, res.status === 429 ? RATE_LIMIT_MESSAGE : 'Failed to create poll');
       const { organizerCode, ...newPoll } = (await res.json()) as Poll & { organizerCode?: string };
       // Stored before anything else, so a later navigation can never lose it.
       if (organizerCode) {
@@ -772,10 +855,16 @@ export default function App() {
   const handleUnlockOrganizer = useCallback(async (code: string): Promise<boolean> => {
     const pollId = activePollIdRef.current;
     if (!pollId) return false;
-    const res = await fetch(pollPath(pollId, '/access'), { headers: { 'X-Organizer-Code': code } });
-    if (!res.ok) throw await readError(res, 'Could not check the code');
-    const { organizer } = (await res.json()) as { organizer?: boolean };
-    if (!organizer) return false;
+    const access = await checkOrganizerCode(pollId, code);
+    if (access.organizer === null) {
+      if (access.status === 404) {
+        handlePollGone(pollId);
+        throw new ApiError(404, POLL_GONE_MESSAGE);
+      }
+      // 429, 5xx or offline: the form says why and offers Try again.
+      throw new Error(access.status === 429 ? access.message : `Could not check the code. ${access.message}`);
+    }
+    if (!access.organizer) return false;
     setOrganizerCode(pollId, code);
     touchPoll(pollId);
     setAccessVersion((version) => version + 1);
@@ -790,7 +879,7 @@ export default function App() {
     }
     void fetchPollsList();
     return true;
-  }, [commitActivePoll, fetchPollsList, showToast]);
+  }, [commitActivePoll, fetchPollsList, handlePollGone, showToast]);
 
   const openCreatedPoll = useCallback(() => {
     if (!createdPoll) return;
@@ -836,6 +925,19 @@ export default function App() {
   const workspace = poll && (
     <section className="d-shell-workspace" data-screen="workspace" data-selection={activeTab} data-organizer-state={organizerState}>
       <FinalizedBanner poll={poll} onResetFinalized={isOrganizer ? handleResetFinalized : undefined} />
+
+      {linkCheck?.pollId === poll.id && (
+        <div role="status" className="d-shell-link-check" data-organizer-link-check="unchecked">
+          <p>The organizer link could not be checked yet. {linkCheck.message}</p>
+          <button
+            type="button"
+            className="edu-btn-secondary"
+            onClick={() => void fetchPoll(poll.id, 'replace', readOrganizerCodeFromUrl())}
+          >
+            Try again
+          </button>
+        </div>
+      )}
 
       <header className="d-shell-page-head">
         <div>
@@ -928,13 +1030,18 @@ export default function App() {
             poll={poll}
             gridInterval={gridInterval}
             onFinalizeSlot={canFinalize ? handleFinalizeSlot : undefined}
+            isFinalizing={isFinalizing}
             activeParticipantFilter={activeParticipantFilter}
             onSelectParticipantFilter={setActiveParticipantFilter}
           />
           <details className="d-shell-disclosure d-shell-consensus-disclosure">
             <summary><Award aria-hidden="true" />Best meeting times</summary>
             <div className="d-shell-disclosure-body">
-              <ConsensusPanel poll={poll} onFinalizeSlot={canFinalize ? handleFinalizeSlot : undefined} />
+              <ConsensusPanel
+                poll={poll}
+                onFinalizeSlot={canFinalize ? handleFinalizeSlot : undefined}
+                isFinalizing={isFinalizing}
+              />
             </div>
           </details>
         </div>
@@ -1086,17 +1193,18 @@ export default function App() {
             </div>
           </section>
         ) : error ? (
-          <div role="alert" className="d-shell-error-state">
+          <div role="alert" className="d-shell-error-state" data-poll-error={error.kind}>
             <AlertCircle aria-hidden="true" />
-            <h2>Poll error</h2>
-            <p>{error}</p>
+            <h2>{error.kind === 'rate-limited' ? 'Too many requests' : 'Poll error'}</h2>
+            <p>{error.message}</p>
             <button
               type="button"
               className="edu-btn-secondary"
               onClick={() => {
                 setError(null);
                 const id = requestedPollIdRef.current ?? new URLSearchParams(window.location.search).get('poll');
-                if (id) void fetchPoll(id, 'replace');
+                // An organizer link that was not checked yet is still in the fragment.
+                if (id) void fetchPoll(id, 'replace', readOrganizerCodeFromUrl());
                 else void goHome('replace');
               }}
             >

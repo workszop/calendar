@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Poll } from '../src/types';
 import {
-  analyzeSlot,
   analyzeWindow,
   findBestMeetingWindows,
   findDateWithoutMeetingFit,
@@ -48,16 +47,16 @@ describe('generateTimeSlots', () => {
   });
 });
 
-describe('analyzeSlot', () => {
+describe('analyzeWindow', () => {
   it('counts preferred as available and tracks names', () => {
-    const a = analyzeSlot(poll, '2026-10-01', '10:00');
+    const a = analyzeWindow(poll, '2026-10-01', '10:00', ['10:00']);
     expect(a.availableCount).toBe(2);
     expect(a.preferredCount).toBe(1);
     expect(a.attendanceRate).toBe(1);
     expect(a.availableNames).toEqual(['Ann', 'Ben']);
   });
   it('treats missing entries as unavailable', () => {
-    const a = analyzeSlot(poll, '2026-10-01', '11:30');
+    const a = analyzeWindow(poll, '2026-10-01', '11:30', ['11:30']);
     expect(a.availableCount).toBe(0);
     expect(a.unavailableCount).toBe(2);
   });
@@ -125,12 +124,9 @@ describe('per-day hours', () => {
     participants: [],
   };
   it('uses the override for that date and the default elsewhere', async () => {
-    const { generateDaySlots, generateAllTimeSlots } = await import('../src/utils/consensus');
+    const { generateDaySlots } = await import('../src/utils/consensus');
     expect(generateDaySlots(twoDay, '2026-10-01')).toEqual(['09:00', '09:30', '10:00', '10:30', '11:00', '11:30']);
     expect(generateDaySlots(twoDay, '2026-10-02')).toEqual(['14:00', '14:30', '15:00', '15:30']);
-    expect(generateAllTimeSlots(twoDay)).toEqual([
-      '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '14:00', '14:30', '15:00', '15:30',
-    ]);
   });
   it('only proposes windows inside each day\'s hours', () => {
     const windows = findBestMeetingWindows(twoDay);
@@ -239,10 +235,9 @@ describe('whole-window attendance', () => {
     });
   });
 
-  it('feeds the slot, grid block and meeting window analyses from the same rule', () => {
+  it('feeds the grid block and meeting window analyses from the same rule', () => {
     const block = { date: day, startTime: '10:00', endTime: '11:00', slotTimes: ['10:00', '10:30'] };
     expect(analyzeGridBlock(poll, block)).toEqual(analyzeWindow(poll, day, '10:00', ['10:00', '10:30']));
-    expect(analyzeSlot(poll, day, '11:00')).toEqual(analyzeWindow(poll, day, '11:00', ['11:00']));
     const best = findBestMeetingWindows(poll).find((w) => w.startTime === '09:30')!;
     const summary = summarizeWindowAttendance(poll, day, ['09:30', '10:00']);
     expect(best.availableAttendees).toEqual(summary.availableNames);

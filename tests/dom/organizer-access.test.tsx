@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement as h } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App, { apiRetry } from '../../src/App';
+import { ConsensusPanel } from '../../src/components/ConsensusPanel';
+import { toDateStr } from '../../src/utils/calendar';
 import type { Poll, PollSummary } from '../../src/types';
+
+// Confetti needs a real canvas, which jsdom lacks.
+vi.mock('canvas-confetti', () => ({ default: vi.fn() }));
 
 beforeEach(() => {
   apiRetry.baseDelayMs = 0;
@@ -80,6 +85,34 @@ function storedResponses(): Record<string, { participantId: string; editCode: st
 
 function storedCodes(): Record<string, string> {
   return JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}');
+}
+
+function rateLimited(message: string): Response {
+  return new Response(JSON.stringify({ error: message }), { status: 429, headers: { 'Retry-After': '30' } });
+}
+
+/** The always-mounted toast live region; empty when nothing is toasted. */
+function toastText(): string | null | undefined {
+  return document.querySelector('[aria-live="polite"].fixed')?.textContent;
+}
+
+// Dates relative to today, so the Add dates calendar never treats them as past.
+const day = (offset: number) => {
+  const d = new Date();
+  return toDateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + offset));
+};
+
+/** Opens Add dates and submits one new date with a 09:00 proposal. */
+async function submitNewDate() {
+  fireEvent.click(await waitFor(() => document.getElementById('add-dates-button')!));
+  const dialog = await screen.findByRole('dialog', { name: 'Add Dates' });
+  for (let i = 0; i < 16 && !document.querySelector(`#toggle-date-${day(3)}`); i++) {
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next month' }));
+  }
+  fireEvent.click(document.querySelector<HTMLButtonElement>(`#toggle-date-${day(3)}`)!);
+  fireEvent.click(document.querySelector<HTMLButtonElement>(`[data-proposal-grid] [data-slot-key="${day(3)}T09:00"]`)!);
+  fireEvent.click(document.querySelector<HTMLButtonElement>('#add-dates-submit-btn')!);
+  return dialog;
 }
 
 describe('organizer access', () => {
@@ -488,13 +521,13 @@ describe('organizer access', () => {
     expect(respondCalls(calls)).toHaveLength(4);
   });
 
-  it('shows the server message in a toast on 429', async () => {
+  it('shows a 429 on saving once, inline, without a toast', async () => {
     const poll = makePoll({ participants: [] });
     const message = 'Too many changes. Try again in a minute.';
     mockFetch(({ url, method }) => {
       if (url === '/api/polls/p1' && method === 'GET') return jsonResponse(poll);
       if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
-      if (url === '/api/polls/p1/respond') return new Response(JSON.stringify({ error: message }), { status: 429, headers: { 'Retry-After': '30' } });
+      if (url === '/api/polls/p1/respond') return rateLimited(message);
       return undefined;
     });
     window.history.replaceState({}, '', '/?poll=p1');
@@ -502,11 +535,266 @@ describe('organizer access', () => {
     const save = await openAnswerTab();
     fireEvent.change(screen.getByLabelText(/Your Name/), { target: { value: 'Me' } });
     fireEvent.click(save);
-    await waitFor(() => expect(screen.getAllByText(message).length).toBeGreaterThanOrEqual(2));
-    expect(document.querySelector('[aria-live="polite"].fixed')?.textContent).toBe(message);
+    await waitFor(() => expect(document.querySelector('[data-save-status]')?.textContent).toBe(message));
+    expect(screen.getAllByText(message)).toHaveLength(1);
+    expect(toastText()).toBe('');
   });
 
-  it('omits an empty email when updating its own response and sends a typed one', async () => {
+  it('shows a 429 on create once, in the page alert, without a toast', async () => {
+    const message = 'Too many new polls. Try again later.';
+    mockFetch(({ url, method }) => {
+      if (url === '/api/polls' && method === 'POST') return rateLimited(message);
+      return undefined;
+    });
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Meetings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Create a poll' }));
+    fireEvent.change(screen.getByLabelText(/Meeting name/), { target: { value: 'Fresh poll' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Next 3 Days' }));
+    for (const slot of document.querySelectorAll<HTMLButtonElement>('[data-proposal-grid] [data-slot-key]')) {
+      if (/T09:(00|30)$/.test(slot.dataset.slotKey ?? '')) fireEvent.click(slot);
+    }
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Create poll' }));
+    await waitFor(() => expect(screen.getAllByText(message)).toHaveLength(1));
+    expect(screen.getByText(message).getAttribute('role')).toBe('alert');
+    expect(toastText()).toBe('');
+  });
+
+  // ─── Organizer links that cannot be checked yet (B9) ───
+
+  it.each([
+    ['a network error', (): Response => { throw new TypeError('Failed to fetch'); }, /connection/],
+    ['a 429', (): Response => rateLimited('Slow down, please.'), /Slow down, please\./],
+  ])('keeps the organizer link fragment after %s, stores nothing, and retries on Try again', async (_label, fail, shown) => {
+    const poll = makePoll();
+    let accessUp = false;
+    mockFetch(({ url, headers }) => {
+      if (url === '/api/polls/p1') return jsonResponse(poll);
+      if (url === '/api/polls/p1/access') {
+        if (!accessUp) return fail();
+        return jsonResponse({ organizer: headers['x-organizer-code'] === 'link-code' });
+      }
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1#organizer=link-code');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    const notice = await waitFor(() => {
+      const found = document.querySelector('[data-organizer-link-check]');
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(notice.textContent).toMatch(shown);
+    expect(window.location.hash).toBe('#organizer=link-code');
+    expect(storedCodes()).toEqual({});
+    expect(document.querySelector('[data-organizer-state]')?.getAttribute('data-organizer-state')).toBe('visitor');
+
+    accessUp = true;
+    fireEvent.click(within(notice as HTMLElement).getByRole('button', { name: 'Try again' }));
+    await waitFor(() =>
+      expect(document.querySelector('[data-organizer-state]')?.getAttribute('data-organizer-state')).toBe('organizer')
+    );
+    expect(storedCodes()).toEqual({ p1: 'link-code' });
+    expect(window.location.hash).toBe('');
+    expect(document.querySelector('[data-organizer-link-check]')).toBeNull();
+  });
+
+  it('drops the fragment of a link whose code the server rejects', async () => {
+    const poll = makePoll();
+    mockFetch(({ url }) => {
+      if (url === '/api/polls/p1') return jsonResponse(poll);
+      if (url === '/api/polls/p1/access') return jsonResponse({ organizer: false });
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1#organizer=wrong-code');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    expect(window.location.hash).toBe('');
+    expect(storedCodes()).toEqual({});
+    expect(document.querySelector('[data-organizer-link-check]')).toBeNull();
+  });
+
+  // ─── Unlock form (B6, B12) ───
+
+  it('shows a 429 on unlocking with the server text, keeps focus in the form and offers Try again', async () => {
+    const poll = makePoll();
+    let answerAccess: ((response: Response) => void) | undefined;
+    mockFetch(({ url }) => {
+      if (url === '/api/polls/p1') return jsonResponse(poll);
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      return undefined;
+    });
+    const plainFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/polls/p1/access'
+        ? new Promise<Response>((resolve) => { answerAccess = resolve; })
+        : plainFetch(input, init)
+    ));
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    fireEvent.click(screen.getByText('Manage poll'));
+    const input = screen.getByLabelText(/Are you the organizer/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'right-code' } });
+    input.focus();
+    fireEvent.submit(input.closest('form')!);
+
+    // While checking, the field stays enabled and focused.
+    await waitFor(() => expect(document.querySelector('[data-organizer-unlock]')?.getAttribute('data-organizer-unlock')).toBe('checking'));
+    expect(input.disabled).toBe(false);
+    expect(input.readOnly).toBe(true);
+    expect(document.activeElement).toBe(input);
+
+    answerAccess?.(rateLimited('Too many code checks. Wait a minute.'));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('Too many code checks. Wait a minute.');
+    expect(document.activeElement).toBe(input);
+    expect(storedCodes()).toEqual({});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    answerAccess?.(jsonResponse({ organizer: true }));
+    await screen.findByRole('button', { name: 'Delete this poll' });
+    expect(storedCodes()).toEqual({ p1: 'right-code' });
+  });
+
+  it('moves focus to the unlock form after a 403 in Add dates', async () => {
+    localStorage.setItem('timesync_organizer_codes', JSON.stringify({ p1: 'revoked-code' }));
+    const poll = makePoll({ dates: [day(2)] });
+    const message = 'Only the organizer can do this. Enter the organizer code to unlock it.';
+    mockFetch(({ url, method }) => {
+      if (url === '/api/polls/p1' && method === 'GET') return jsonResponse(poll);
+      if (url === '/api/polls/p1/access') return jsonResponse({ organizer: true });
+      if (url === '/api/polls/p1/dates') return jsonResponse({ error: message }, 403);
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    await submitNewDate();
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Dates' })).toBeNull());
+    await waitFor(() => expect(document.activeElement?.id).toBe('organizer-unlock-code'));
+    expect(storedCodes()).toEqual({});
+  });
+
+  it('shows a 429 in Add dates once, inside the dialog, without a toast', async () => {
+    localStorage.setItem('timesync_organizer_codes', JSON.stringify({ p1: 'code' }));
+    const poll = makePoll({ dates: [day(2)] });
+    const message = 'Too many changes. Try again in a minute.';
+    mockFetch(({ url, method }) => {
+      if (url === '/api/polls/p1' && method === 'GET') return jsonResponse(poll);
+      if (url === '/api/polls/p1/access') return jsonResponse({ organizer: true });
+      if (url === '/api/polls/p1/dates') return rateLimited(message);
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    const dialog = await submitNewDate();
+    expect(await within(dialog).findByText(message)).toBeTruthy();
+    expect(screen.getAllByText(message)).toHaveLength(1);
+    expect(toastText()).toBe('');
+    expect(storedCodes()).toEqual({ p1: 'code' });
+  });
+
+  // ─── Organizer actions on a deleted poll ───
+
+  it.each([
+    ['locking a time', async () => {
+      fireEvent.click(document.getElementById('finalize-top-option-btn')!);
+    }, makePoll()],
+    ['re-opening voting', async () => {
+      fireEvent.click(document.getElementById('reopen-poll-button')!);
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Re-open voting?' })).getByRole('button', { name: 'Re-open voting' }));
+    }, makePoll({ finalizedSlot: { date: '2026-10-01', startTime: '09:00', endTime: '09:30', confirmedBy: 'Ada', confirmedAt: '' } })],
+    ['adding dates', async () => {
+      await submitNewDate();
+    }, makePoll({ dates: [day(2)] })],
+  ])('treats a 404 while %s as a deleted poll and forgets its codes', async (_label, act, poll) => {
+    localStorage.setItem('timesync_organizer_codes', JSON.stringify({ p1: 'code' }));
+    localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'part_bob', editCode: 'e' } }));
+    mockFetch(({ url, method }) => {
+      if (url === '/api/polls/p1' && method === 'GET') return jsonResponse(poll);
+      if (url === '/api/polls/p1/access') return jsonResponse({ organizer: true });
+      if (method === 'POST') return jsonResponse({ error: 'Poll not found' }, 404);
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      return undefined;
+    });
+    window.history.replaceState({}, '', '/?poll=p1');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Group overview' }));
+    await waitFor(() =>
+      expect(document.querySelector('[data-organizer-state]')?.getAttribute('data-organizer-state')).toBe('organizer')
+    );
+    await act();
+
+    await waitFor(() => expect(document.querySelector('[data-poll-error]')?.getAttribute('data-poll-error')).toBe('not-found'));
+    expect(screen.getAllByText(/This poll no longer exists\./)).toHaveLength(1);
+    expect(toastText()).toBe('');
+    expect(storedCodes()).toEqual({});
+    expect(storedResponses()).toEqual({});
+  });
+
+  // ─── Locking a time (B11, B14) ───
+
+  it('sends one lock request for a double click and disables Agree while it is pending', async () => {
+    localStorage.setItem('timesync_organizer_codes', JSON.stringify({ p1: 'code' }));
+    const poll = makePoll();
+    let answerFinalize: ((response: Response) => void) | undefined;
+    const calls = mockFetch(({ url, method }) => {
+      if (url === '/api/polls/p1' && method === 'GET') return jsonResponse(poll);
+      if (url === '/api/polls/p1/access') return jsonResponse({ organizer: true });
+      if (url.startsWith('/api/polls?ids=')) return listFor(url, poll);
+      if (url === '/api/polls/p1/finalize') return new Response(null, { status: 599 });
+      return undefined;
+    });
+    const recordingFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const response = recordingFetch(input, init);
+      return String(input) === '/api/polls/p1/finalize'
+        ? new Promise<Response>((resolve) => { answerFinalize = resolve; })
+        : response;
+    }));
+    window.history.replaceState({}, '', '/?poll=p1');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Guarded' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Group overview' }));
+    const agree = await waitFor(() => {
+      const button = document.getElementById('finalize-top-option-btn') as HTMLButtonElement | null;
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    fireEvent.click(agree);
+    fireEvent.click(agree);
+
+    await waitFor(() => expect(agree.disabled).toBe(true));
+    expect(agree.getAttribute('data-finalizing')).toBe('true');
+    expect(calls.filter((call) => call.url === '/api/polls/p1/finalize')).toHaveLength(1);
+
+    const locked = { ...poll, finalizedSlot: { date: '2026-10-01', startTime: '09:00', endTime: '09:30', confirmedBy: 'Ada', confirmedAt: '' } };
+    answerFinalize?.(jsonResponse(locked));
+    await waitFor(() => expect(document.getElementById('finalized-meeting-banner')).toBeTruthy());
+    expect(calls.filter((call) => call.url === '/api/polls/p1/finalize')).toHaveLength(1);
+  });
+
+  it('omits an email that was always empty, sends a typed one and clears an emptied one', async () => {
     localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'part_me', editCode: 'code' } }));
     let poll = ownPoll();
     const calls = mockFetch(({ url, method }) => {
@@ -527,9 +815,36 @@ describe('organizer access', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
     await waitFor(() => expect(respondCalls(calls)).toHaveLength(2));
 
-    const [emptyUpdate, typedUpdate] = respondCalls(calls);
+    // Emptying the typed email afterwards clears it on the server (contract 12).
+    fireEvent.click(screen.getByRole('tab', { name: 'My answer' }));
+    fireEvent.change(await screen.findByLabelText(/Your Email/), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
+    await waitFor(() => expect(respondCalls(calls)).toHaveLength(3));
+
+    const [emptyUpdate, typedUpdate, clearedUpdate] = respondCalls(calls);
     expect(emptyUpdate.body).not.toHaveProperty('email');
     expect((emptyUpdate.body as { participantId?: string }).participantId).toBe('part_me');
     expect(typedUpdate.body).toMatchObject({ email: 'me@example.com', participantId: 'part_me' });
+    expect(clearedUpdate.body).toMatchObject({ email: '', participantId: 'part_me' });
+    expect(localStorage.getItem('timesync_user_email')).toBeNull();
+  });
+});
+
+describe('ConsensusPanel lock state', () => {
+  it('tells visitors of an open poll that only the organizer can agree a time', () => {
+    render(h(ConsensusPanel, { poll: makePoll() }));
+    const state = document.querySelector('[data-consensus-lock]');
+    expect(state?.getAttribute('data-consensus-lock')).toBe('visitor');
+    expect(state?.textContent).toBe('Only the organizer can agree a time');
+    expect(screen.queryByText('Voting is locked')).toBeNull();
+  });
+
+  it('says "Voting is locked" only once a time is locked', () => {
+    const finalizedSlot = { date: '2026-10-01', startTime: '09:30', endTime: '10:00', confirmedBy: 'Ada', confirmedAt: '' };
+    render(h(ConsensusPanel, { poll: makePoll({ finalizedSlot }), onFinalizeSlot: vi.fn() }));
+    const states = [...document.querySelectorAll('[data-consensus-lock]')];
+    expect(states.length).toBeGreaterThan(0);
+    expect(states.every((state) => state.getAttribute('data-consensus-lock') === 'locked')).toBe(true);
+    expect(states.every((state) => state.textContent === 'Voting is locked')).toBe(true);
   });
 });

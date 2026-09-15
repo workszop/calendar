@@ -7,13 +7,19 @@ import type { MeetingWindowOption } from '../utils/consensus';
 
 interface ConsensusPanelProps {
   poll: Poll;
+  /** Only the organizer gets this; visitors see who can agree a time instead. */
   onFinalizeSlot?: (date: string, startTime: string, endTime: string) => void;
+  /** A lock request is on its way: the agree controls wait for it. */
+  isFinalizing?: boolean;
 }
 
-export const ConsensusPanel: React.FC<ConsensusPanelProps> = ({ poll, onFinalizeSlot }) => {
+export const ConsensusPanel: React.FC<ConsensusPanelProps> = ({ poll, onFinalizeSlot, isFinalizing = false }) => {
   const options = useMemo(() => findBestMeetingWindows(poll), [poll]);
   const total = poll.participants.length;
   const canFinalize = Boolean(onFinalizeSlot) && !poll.finalizedSlot;
+  // Why a time cannot be agreed here: the poll is locked, or this viewer is not the organizer.
+  const lockedLabel = poll.finalizedSlot ? 'Voting is locked' : 'Only the organizer can agree a time';
+  const lockedState = poll.finalizedSlot ? 'locked' : 'visitor';
 
   if (total === 0) {
     return (
@@ -143,18 +149,22 @@ export const ConsensusPanel: React.FC<ConsensusPanelProps> = ({ poll, onFinalize
                 <button
                   id="finalize-top-option-btn"
                   type="button"
+                  disabled={isFinalizing}
+                  aria-busy={isFinalizing}
+                  data-finalizing={isFinalizing ? 'true' : 'false'}
                   onClick={() => onFinalizeSlot?.(topOption.date, topOption.startTime, topOption.endTime)}
                   className="edu-btn-primary"
                 >
                   <CalendarCheck className="w-4 h-4" />
-                  Agree on this time
+                  {isFinalizing ? 'Locking...' : 'Agree on this time'}
                 </button>
               ) : (
                 <span
                   role="status"
+                  data-consensus-lock={lockedState}
                   className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-100 text-stone-600 text-xs font-bold rounded-full"
                 >
-                  Voting is locked
+                  {lockedLabel}
                 </span>
               )}
             </div>
@@ -236,13 +246,14 @@ export const ConsensusPanel: React.FC<ConsensusPanelProps> = ({ poll, onFinalize
                       <button
                         id={`select-alternative-btn-${opt.date}-${opt.startTime}`}
                         type="button"
+                        disabled={isFinalizing}
                         onClick={() => onFinalizeSlot?.(opt.date, opt.startTime, opt.endTime)}
                         className="text-xs font-bold text-stone-900 hover:underline inline-flex items-center gap-1"
                       >
                         Choose this slot →
                       </button>
                     ) : (
-                      <span className="text-xs font-bold text-stone-500">Voting is locked</span>
+                      <span className="text-xs font-bold text-stone-500" data-consensus-lock={lockedState}>{lockedLabel}</span>
                     )}
                   </div>
                 </div>

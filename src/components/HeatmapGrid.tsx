@@ -15,6 +15,8 @@ interface HeatmapGridProps {
   gridInterval?: GridInterval;
   /** Only supplied when finalizing is allowed; the agree button hides without it. */
   onFinalizeSlot?: (date: string, startTime: string, endTime: string) => void;
+  /** A lock request is on its way: the agree control waits for it. */
+  isFinalizing?: boolean;
   activeParticipantFilter: string | null;
   onSelectParticipantFilter: (id: string | null) => void;
 }
@@ -92,6 +94,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   poll,
   gridInterval,
   onFinalizeSlot,
+  isFinalizing = false,
   activeParticipantFilter,
   onSelectParticipantFilter,
 }) => {
@@ -406,7 +409,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               </div>
               <p className="d-calendar-panel-note">Select a time to see who can attend.</p>
             </header>
-            <TimeZoneNote timeZone={poll.timezone} />
+            <TimeZoneNote timeZone={poll.timezone} dates={poll.dates} />
 
             <div
               className="d-calendar-table-wrap"
@@ -553,7 +556,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             <button
               id="quick-finalize-hover-slot"
               data-finalize-slot={pinnedDetail.analysis.slotKey}
+              data-finalizing={isFinalizing ? 'true' : 'false'}
               type="button"
+              disabled={isFinalizing}
+              aria-busy={isFinalizing}
               onClick={() =>
                 onFinalizeSlot(
                   pinnedDetail.analysis.date,
@@ -567,7 +573,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               )} ${poll.timezone} (${poll.durationMinutes} min)`}
             >
               <CalendarCheck className="d-calendar-action-icon" aria-hidden="true" />
-              Agree on this timing
+              {isFinalizing ? 'Locking...' : 'Agree on this timing'}
             </button>
           </div>
         </ActionDock>

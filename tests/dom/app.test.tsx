@@ -385,7 +385,7 @@ describe('App navigation and home contract', () => {
 
   // ─── Remembered polls (B4, B6) ───
 
-  it('lists polls newest touched first and forgets ids the server no longer has', async () => {
+  it('lists polls newest touched first and never forgets ids the home list leaves out', async () => {
     localStorage.clear();
     localStorage.setItem('timesync_organizer_codes', JSON.stringify({ created: 'c', gone: 'g' }));
     localStorage.setItem('timesync_responses', JSON.stringify({ answered: { participantId: 'x', editCode: 'e' } }));
@@ -393,7 +393,7 @@ describe('App navigation and home contract', () => {
     const created = makePoll('created', 'Created here');
     const answered = makePoll('answered', 'Answered here');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      // The server answers in its own order and leaves out the deleted poll.
+      // The server answers in its own order and leaves one poll out (e.g. a blip).
       if (route(input) === '/api/polls') return Promise.resolve(jsonResponse([summary(answered), summary(created)]));
       throw new Error(`Unexpected ${route(input)}`);
     });
@@ -406,8 +406,9 @@ describe('App navigation and home contract', () => {
       'created',
       'answered',
     ]);
-    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).toEqual({ created: 'c' });
-    expect(Object.keys(JSON.parse(localStorage.getItem('timesync_recent_polls') ?? '{}'))).not.toContain('gone');
+    // Contract 11: an omitted id is only hidden. Its codes stay until a detail 404.
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).toEqual({ created: 'c', gone: 'g' });
+    expect(Object.keys(JSON.parse(localStorage.getItem('timesync_recent_polls') ?? '{}'))).toContain('gone');
   });
 
   it('forgets a poll whose detail request returns 404', async () => {
@@ -424,8 +425,80 @@ describe('App navigation and home contract', () => {
 
     render(h(App));
     await screen.findByRole('heading', { name: 'Poll error' });
+    expect(document.querySelector('[data-poll-error]')?.getAttribute('data-poll-error')).toBe('not-found');
+    expect(screen.getByRole('alert').textContent).toContain('This poll no longer exists.');
     expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).not.toHaveProperty('p1');
     expect(JSON.parse(localStorage.getItem('timesync_responses') ?? '{}')).toEqual({});
+  });
+
+  it.each([
+    ['a 429', () => Promise.resolve(new Response(JSON.stringify({ error: 'Slow down. Try again in 30 seconds.' }), { status: 429, headers: { 'Retry-After': '30' } }))],
+    ['a 503', () => Promise.resolve(jsonResponse({ error: 'Storage unavailable' }, 503))],
+    ['a network error', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ])('never forgets a poll after %s on the detail request', async (_label, failure) => {
+    localStorage.setItem('timesync_responses', JSON.stringify({ p1: { participantId: 'x', editCode: 'e' } }));
+    const poll = makePoll('p1', 'Still here');
+    let detailAttempts = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = route(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
+      if (url === '/api/polls/p1/access') return failure();
+      if (url === '/api/polls/p1') {
+        detailAttempts += 1;
+        return detailAttempts === 1 ? failure() : Promise.resolve(jsonResponse(poll));
+      }
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).not.toMatch(/not found|no longer exists/i);
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).toHaveProperty('p1', 'code-p1');
+    expect(JSON.parse(localStorage.getItem('timesync_responses') ?? '{}')).toHaveProperty('p1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await screen.findByRole('heading', { name: 'Still here' });
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}')).toHaveProperty('p1', 'code-p1');
+  });
+
+  it('says "too many requests" with the server text on a 429, not "Poll not found", and retries', async () => {
+    const poll = makePoll('p1', 'Busy poll');
+    let detailAttempts = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = route(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
+      if (url === '/api/polls/p1/access') return Promise.resolve(jsonResponse({ organizer: true }));
+      if (url === '/api/polls/p1') {
+        detailAttempts += 1;
+        if (detailAttempts === 1) {
+          return Promise.resolve(new Response(JSON.stringify({ error: 'Slow down. Try again in 30 seconds.' }), { status: 429 }));
+        }
+        // A platform limit may come without a JSON body.
+        if (detailAttempts === 2) return Promise.resolve(new Response('', { status: 429 }));
+        return Promise.resolve(jsonResponse(poll));
+      }
+      throw new Error(`Unexpected ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Too many requests' });
+    expect(document.querySelector('[data-poll-error]')?.getAttribute('data-poll-error')).toBe('rate-limited');
+    expect(screen.getByRole('alert').textContent).toContain('Slow down. Try again in 30 seconds.');
+    // Shown once: inline, not also as a toast.
+    expect(document.querySelector('[aria-live="polite"].fixed')?.textContent).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(detailAttempts).toBe(2));
+    await screen.findByRole('heading', { name: 'Too many requests' });
+    expect(screen.getByRole('alert').textContent).toMatch(/Too many requests\. Please wait/);
+    expect(screen.getByRole('alert').textContent).not.toMatch(/not found/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await screen.findByRole('heading', { name: 'Busy poll' });
   });
 
   it('retries a retryable conflict when deleting a poll', async () => {

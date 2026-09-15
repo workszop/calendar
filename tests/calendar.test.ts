@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   addMinutesToTime,
   describeTimeZoneDifference,
+  formatDateHeading,
   formatHour,
   formatTimeSlot,
   generateGoogleCalendarUrl,
   generateIcsContent,
   generateOutlookUrl,
   hourToTimeStr,
-  toCompactIso,
   toDateStr,
   zonedTimeToUtc,
 } from '../src/utils/calendar';
@@ -86,18 +86,6 @@ describe('slotKey', () => {
   it('joins date and time with a T', () => {
     expect(slotKey('2026-10-01', '10:00')).toBe('2026-10-01T10:00');
     expect(slotKey('2026-10-01', '09:30')).toBe('2026-10-01T09:30');
-  });
-});
-
-describe('toCompactIso', () => {
-  it('joins a date and a time into the calendar wire format', () => {
-    expect(toCompactIso('2026-10-01', '09:30')).toBe('20261001T093000');
-    expect(toCompactIso('2026-12-31', '23:00')).toBe('20261231T230000');
-    expect(toCompactIso('2026-01-05', '00:00')).toBe('20260105T000000');
-  });
-
-  it('normalizes the exclusive 24:00 end to the next calendar day', () => {
-    expect(toCompactIso('2026-10-01', '24:00')).toBe('20261002T000000');
   });
 });
 
@@ -257,14 +245,38 @@ describe('describeTimeZoneDifference', () => {
   const summer = new Date('2026-07-01T12:00:00Z');
 
   it('says nothing when the viewer is in the poll zone', () => {
-    expect(describeTimeZoneDifference('Europe/Warsaw', 'Europe/Warsaw', summer)).toBeNull();
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'Europe/Warsaw', ['2026-07-01'])).toBeNull();
   });
 
-  it('describes the current offset difference from the viewer side', () => {
-    expect(describeTimeZoneDifference('Europe/Warsaw', 'America/New_York', summer)).toBe('your time is 6 h earlier');
-    expect(describeTimeZoneDifference('Europe/Warsaw', 'Asia/Kolkata', summer)).toBe('your time is 3 h 30 min later');
-    expect(describeTimeZoneDifference('UTC', 'Europe/London', new Date('2026-01-15T12:00:00Z'))).toBe(
-      'your clock shows the same time'
+  it('describes the offset difference from the viewer side', () => {
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'America/New_York', ['2026-07-01'])).toBe('your time is 6 h earlier');
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'Asia/Kolkata', ['2026-07-01'])).toBe('your time is 3 h 30 min later');
+    expect(describeTimeZoneDifference('UTC', 'Europe/London', ['2026-01-15'])).toBe('your clock shows the same time');
+    // Without dates it falls back to the offsets at `now`.
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'America/New_York', [], summer)).toBe('your time is 6 h earlier');
+  });
+
+  it("uses the poll's dates, not today's offsets", () => {
+    // In July New York is 6 h behind Warsaw, but a poll in the week after the EU
+    // clock change (25 Oct) and before the US one (1 Nov) is only 5 h apart.
+    expect(describeTimeZoneDifference('Europe/Warsaw', 'America/New_York', ['2026-10-27', '2026-10-29'], summer)).toBe(
+      'your time is 5 h earlier'
+    );
+  });
+
+  it('names each change when the poll spans a DST change in one zone', () => {
+    const { dayMonth: oct26 } = formatDateHeading('2026-10-26');
+    const { dayMonth: nov2 } = formatDateHeading('2026-11-02');
+    expect(describeTimeZoneDifference('America/New_York', 'Europe/Warsaw', ['2026-10-26', '2026-10-20'])).toBe(
+      `your time is 6 h later (5 h from ${oct26})`
+    );
+    expect(
+      describeTimeZoneDifference('Europe/Warsaw', 'America/New_York', ['2026-10-20', '2026-10-26', '2026-11-02'])
+    ).toBe(`your time is 6 h earlier (5 h from ${oct26}, 6 h from ${nov2})`);
+    // Spring: the US moves on 8 Mar, the EU on 29 Mar; London starts level with UTC.
+    const { dayMonth: mar30 } = formatDateHeading('2026-03-30');
+    expect(describeTimeZoneDifference('UTC', 'Europe/London', ['2026-03-20', '2026-03-30'])).toBe(
+      `your clock shows the same time (1 h later from ${mar30})`
     );
   });
 });

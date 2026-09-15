@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Download, KeyRound, Link2 } from 'lucide-react';
 import { downloadTextFile, fileSafeName } from '../utils/download';
 
@@ -13,16 +13,22 @@ export function organizerLink(pollId: string, code: string): string {
   return `${window.location.origin}${window.location.pathname}?poll=${encodeURIComponent(pollId)}#${ORGANIZER_FRAGMENT_KEY}=${encodeURIComponent(code)}`;
 }
 
-/** Reads and removes an organizer code from the current URL fragment. */
-export function takeOrganizerCodeFromUrl(): string | undefined {
+/** Reads an organizer code from the current URL fragment, leaving the URL alone. */
+export function readOrganizerCodeFromUrl(): string | undefined {
   if (!window.location.hash) return undefined;
   const code = new URLSearchParams(window.location.hash.slice(1)).get(ORGANIZER_FRAGMENT_KEY)?.trim();
-  if (code) {
-    const url = new URL(window.location.href);
-    url.hash = '';
-    window.history.replaceState(window.history.state, '', url.toString());
-  }
   return code || undefined;
+}
+
+/**
+ * Removes the organizer code from the URL. Called only once the server gave a
+ * definite answer about it, so an unchecked link survives a reload.
+ */
+export function clearOrganizerCodeFromUrl(): void {
+  if (!readOrganizerCodeFromUrl()) return;
+  const url = new URL(window.location.href);
+  url.hash = '';
+  window.history.replaceState(window.history.state, '', url.toString());
 }
 
 interface OrganizerCodePanelProps {
@@ -101,7 +107,10 @@ export const OrganizerCodePanel: React.FC<OrganizerCodePanelProps> = ({
 };
 
 interface UnlockOrganizerFormProps {
-  /** Resolves true when the code unlocks the poll. */
+  /**
+   * Resolves true when the code unlocks the poll, false when it does not match.
+   * Rejects with a readable message when the code could not be checked.
+   */
   onUnlock: (code: string) => Promise<boolean>;
   /** Why the form is back, e.g. the stored code stopped working. */
   notice?: string | null;
@@ -110,29 +119,49 @@ interface UnlockOrganizerFormProps {
 export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlock, notice }) => {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Set when the check itself failed (e.g. 429): the form offers Try again.
+  const [canRetry, setCanRetry] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
+  const checkingRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const check = async () => {
+    if (checkingRef.current) return;
     const trimmed = code.trim();
     if (!trimmed) {
       setError('Enter the organizer code.');
+      setCanRetry(false);
       return;
     }
+    // The input stays enabled (read-only) so focus never drops while checking.
+    checkingRef.current = true;
     setIsChecking(true);
     setError(null);
+    setCanRetry(false);
     try {
       if (await onUnlock(trimmed)) setCode('');
       else setError('That code does not match this poll.');
-    } catch {
-      setError('Could not check the code. Please try again.');
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not check the code. Please try again.');
+      setCanRetry(true);
     } finally {
+      checkingRef.current = false;
       setIsChecking(false);
     }
   };
 
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    void check();
+  };
+
   return (
-    <form className="d-shell-share-box d-organizer-unlock" data-organizer-unlock onSubmit={handleSubmit}>
+    <form
+      className="d-shell-share-box d-organizer-unlock"
+      data-organizer-unlock={isChecking ? 'checking' : canRetry ? 'failed' : 'idle'}
+      aria-busy={isChecking}
+      onSubmit={handleSubmit}
+    >
       <label htmlFor="organizer-unlock-code">
         <KeyRound aria-hidden="true" /> Are you the organizer?
       </label>
@@ -146,12 +175,14 @@ export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlo
       </p>
       <div>
         <input
+          ref={inputRef}
           id="organizer-unlock-code"
           type="text"
           autoComplete="off"
           spellCheck={false}
           value={code}
-          disabled={isChecking}
+          readOnly={isChecking}
+          aria-busy={isChecking}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? 'organizer-unlock-error' : undefined}
           onChange={(event) => {
@@ -160,7 +191,7 @@ export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlo
           }}
           className="d-organizer-code-value"
         />
-        <button type="submit" className="edu-btn-primary" disabled={isChecking}>
+        <button type="submit" className="edu-btn-primary" aria-disabled={isChecking}>
           {isChecking ? 'Checking...' : 'Unlock'}
         </button>
       </div>
@@ -168,6 +199,20 @@ export const UnlockOrganizerForm: React.FC<UnlockOrganizerFormProps> = ({ onUnlo
         <p id="organizer-unlock-error" role="alert" className="d-organizer-unlock-error">
           {error}
         </p>
+      )}
+      {canRetry && (
+        <button
+          type="button"
+          className="edu-btn-secondary"
+          data-organizer-unlock-retry
+          onClick={() => {
+            // This button goes away while checking: keep focus on the code field.
+            inputRef.current?.focus();
+            void check();
+          }}
+        >
+          Try again
+        </button>
       )}
     </form>
   );

@@ -54,28 +54,6 @@ export function addMinutesToTime(timeStr: string, minutesToAdd: number): string 
   return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
 }
 
-interface CalendarDateTime {
-  date: string;
-  time: string;
-}
-
-/** Normalize the floating local calendar value 24:00 to next-day midnight. */
-function normalizeCalendarDateTime(date: string, time: string): CalendarDateTime {
-  if (time !== '24:00') return { date, time };
-
-  const parsed = new Date(`${date}T00:00:00Z`);
-  parsed.setUTCDate(parsed.getUTCDate() + 1);
-  return { date: parsed.toISOString().slice(0, 10), time: '00:00' };
-}
-
-// "2026-10-01" + "09:30" -> "20261001T093000" (calendar wire format)
-export function toCompactIso(date: string, time: string): string {
-  const normalized = normalizeCalendarDateTime(date, time);
-  const [year, month, day] = normalized.date.split('-');
-  const [hour, minute] = normalized.time.split(':');
-  return `${year}${month}${day}T${hour}${minute}00`;
-}
-
 // ─── Time zones ───
 // Poll times are wall-clock values in the poll's IANA zone. Exports need real
 // instants, so they convert through the zone's UTC offset as reported by Intl.
@@ -190,20 +168,47 @@ function formatOffsetDistance(minutes: number): string {
   return hours ? `${hours} h ${rest} min` : `${rest} min`;
 }
 
+function describeOffsetDistance(difference: number): string {
+  if (difference === 0) return 'the same time';
+  return `${formatOffsetDistance(Math.abs(difference))} ${difference < 0 ? 'earlier' : 'later'}`;
+}
+
 /**
- * A short hint comparing the viewer's clock with the poll zone right now, e.g.
- * "your time is 6 h earlier". Null when both zones are the same name.
+ * A short hint comparing the viewer's clock with the poll zone on the poll's
+ * own dates (at noon in the poll zone), e.g. "your time is 6 h earlier". When
+ * a DST change moves the gap between the dates, each change is named once:
+ * "your time is 6 h later (5 h from Oct 26)". Without dates the offsets in
+ * force at `now` are used. Null when both zones are the same name.
  */
 export function describeTimeZoneDifference(
   pollTimeZone: string,
   viewerTimeZone: string,
+  dates: readonly string[] = [],
   now: Date = new Date()
 ): string | null {
   if (!pollTimeZone || pollTimeZone === viewerTimeZone) return null;
-  const difference =
-    getTimeZoneOffsetMinutes(viewerTimeZone, now) - getTimeZoneOffsetMinutes(pollTimeZone, now);
-  if (difference === 0) return 'your clock shows the same time';
-  return `your time is ${formatOffsetDistance(Math.abs(difference))} ${difference < 0 ? 'earlier' : 'later'}`;
+  const differenceAt = (instant: Date) =>
+    getTimeZoneOffsetMinutes(viewerTimeZone, instant) - getTimeZoneOffsetMinutes(pollTimeZone, instant);
+  const sorted = [...new Set(dates)].sort();
+  const points = sorted.length
+    ? sorted.map((date) => ({ date, difference: differenceAt(zonedTimeToUtc(date, '12:00', pollTimeZone)) }))
+    : [{ date: '', difference: differenceAt(now) }];
+
+  const [first, ...rest] = points;
+  const changes: string[] = [];
+  let previous = first.difference;
+  for (const { date, difference } of rest) {
+    if (difference === previous) continue;
+    // Same direction as before: the distance alone is enough.
+    const sameDirection = Math.sign(difference) === Math.sign(previous) && difference !== 0;
+    const label = sameDirection ? formatOffsetDistance(Math.abs(difference)) : describeOffsetDistance(difference);
+    changes.push(`${label} from ${formatDateHeading(date).dayMonth}`);
+    previous = difference;
+  }
+
+  const base =
+    first.difference === 0 ? 'your clock shows the same time' : `your time is ${describeOffsetDistance(first.difference)}`;
+  return changes.length ? `${base} (${changes.join(', ')})` : base;
 }
 
 export function generateGoogleCalendarUrl(poll: Poll, slot: FinalizedSlot): string {

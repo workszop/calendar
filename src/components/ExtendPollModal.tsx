@@ -44,6 +44,11 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const dateErrorRef = useRef<HTMLParagraphElement | null>(null);
+  const submitErrorRef = useRef<HTMLDivElement | null>(null);
+  // Move focus to the first error only right after a submit, as the create page
+  // does: clearing one error while fixing another must not pull focus away.
+  const focusErrorsRef = useRef(false);
 
   const todayStr = toDateStr(new Date());
 
@@ -57,6 +62,14 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
     setErrors({});
     setIsSubmitting(false);
   }, [isOpen, poll.id]);
+
+  useEffect(() => {
+    if (!focusErrorsRef.current) return;
+    focusErrorsRef.current = false;
+    if (errors.submit) submitErrorRef.current?.focus();
+    else if (errors.dates) dateErrorRef.current?.focus();
+    else if (errors.hours) document.getElementById('extend-start-hour')?.focus();
+  }, [errors]);
 
   const handleClose = () => {
     if (isSubmitting) return;
@@ -89,6 +102,7 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
       }
     }
     draft.setDates(dates);
+    focusErrorsRef.current = true;
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
@@ -98,6 +112,7 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
       onClose();
     } catch (err) {
       console.error(err);
+      focusErrorsRef.current = true;
       setErrors({
         submit: err instanceof Error && err.message ? err.message : 'Could not add the dates. Please try again.',
       });
@@ -118,7 +133,7 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
     >
       <form onSubmit={handleSubmit} className="space-y-5" noValidate aria-busy={isSubmitting}>
         {errors.submit && (
-          <div role="alert" className="bg-red-500 text-white rounded-xl px-4 py-3 text-xs font-semibold">
+          <div ref={submitErrorRef} role="alert" tabIndex={-1} data-extend-error="submit" className="bg-red-500 text-white rounded-xl px-4 py-3 text-xs font-semibold">
             {errors.submit}
           </div>
         )}
@@ -142,7 +157,7 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
             describedBy={errors.dates ? 'extend-dates-error' : undefined}
           />
           {errors.dates && (
-            <p id="extend-dates-error" role="alert" className="text-xs text-red-700 mt-1">
+            <p ref={dateErrorRef} id="extend-dates-error" role="alert" tabIndex={-1} className="text-xs text-red-700 mt-1">
               {errors.dates}
             </p>
           )}

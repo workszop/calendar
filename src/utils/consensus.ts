@@ -85,13 +85,6 @@ export function generateDaySlots(poll: PollSlotConfig, date: string): string[] {
   return generateTimeSlots(startHour, endHour, poll.slotInterval);
 }
 
-// Union of every date's slots - the grid rows
-export function generateAllTimeSlots(poll: Poll): string[] {
-  const set = new Set<string>();
-  poll.dates.forEach((d) => generateDaySlots(poll, d).forEach((t) => set.add(t)));
-  return [...set].sort();
-}
-
 // "HH:mm" -> minutes after midnight ("09:30" -> 570)
 export function timeToMinutes(timeStr: string): number {
   const [hours, minutes] = timeStr.split(':').map(Number);
@@ -227,11 +220,6 @@ export function summarizeWindowAttendance(
     }
   });
   return summary;
-}
-
-// Analyze single atomic slot
-export function analyzeSlot(poll: Poll, date: string, timeStr: string): SlotAnalysis {
-  return analyzeWindow(poll, date, timeStr, [timeStr]);
 }
 
 /**

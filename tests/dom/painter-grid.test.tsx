@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { AvailabilityPainter } from '../../src/components/AvailabilityPainter';
 import { TimeZoneNote } from '../../src/components/TimeZoneNote';
 import type { Poll } from '../../src/types';
+import { formatDateHeading } from '../../src/utils/calendar';
 
 afterEach(() => {
   cleanup();
@@ -260,7 +261,7 @@ describe('AvailabilityPainter display interval', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
     await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
     // No participant id: saving creates a new response instead of replacing Anna's.
-    expect(onSaveAvailability).toHaveBeenCalledWith('Anna', '', { [key('09:00')]: 'available' }, undefined);
+    expect(onSaveAvailability).toHaveBeenCalledWith('Anna', undefined, { [key('09:00')]: 'available' }, undefined);
   });
 
   it("loads this device's own saved response by id and updates it", async () => {
@@ -284,6 +285,19 @@ describe('AvailabilityPainter display interval', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
     await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
     expect(onSaveAvailability.mock.calls[0]?.[3]).toBe('participant-me');
+  });
+
+  it('sends "" and forgets the remembered email when the user empties the field', async () => {
+    localStorage.setItem('timesync_user_email', 'me@example.com');
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(makePoll({ endHour: 10 }), 30, onSaveAvailability);
+    const email = screen.getByLabelText(/Your Email/) as HTMLInputElement;
+    expect(email.value).toBe('me@example.com');
+
+    fireEvent.change(email, { target: { value: '' } });
+    await savePainter();
+    expect(onSaveAvailability.mock.calls[0]?.[1]).toBe('');
+    expect(localStorage.getItem('timesync_user_email')).toBeNull();
   });
 
   it('renders a Mixed hourly block when atomic answers differ, with explicit coverage metadata', async () => {
@@ -319,7 +333,7 @@ describe('AvailabilityPainter display interval', () => {
     expect(cell('09:00').dataset.status).toBe('none');
 
     await savePainter();
-    expect(onSaveAvailability).toHaveBeenCalledWith('New Person', '', {}, undefined);
+    expect(onSaveAvailability).toHaveBeenCalledWith('New Person', undefined, {}, undefined);
   });
 
   it('preserves atomic votes while flipping 60-minute, 30-minute, then 60-minute views', () => {
@@ -503,7 +517,27 @@ describe('TimeZoneNote', () => {
 
     rerender(h(TimeZoneNote, { timeZone: 'Europe/Warsaw', viewerTimeZone: 'America/Chicago', now: summer }));
     expect(document.querySelector('[data-timezone-note]')?.textContent).toBe(
-      'Times in Europe/Warsaw (your time is 7 h earlier)'
+      'Times in Europe/Warsaw, your time is 7 h earlier'
+    );
+  });
+
+  it("follows the offsets on the poll's dates, including a DST change between them", () => {
+    const summer = new Date('2026-07-01T12:00:00Z');
+    const { rerender } = render(
+      h(TimeZoneNote, { timeZone: 'Europe/Warsaw', viewerTimeZone: 'America/New_York', dates: ['2026-10-27'], now: summer })
+    );
+    expect(document.querySelector('[data-timezone-hint]')?.textContent).toBe(', your time is 5 h earlier');
+
+    rerender(
+      h(TimeZoneNote, {
+        timeZone: 'Europe/Warsaw',
+        viewerTimeZone: 'America/New_York',
+        dates: ['2026-10-20', '2026-10-27'],
+        now: summer,
+      })
+    );
+    expect(document.querySelector('[data-timezone-hint]')?.textContent).toBe(
+      `, your time is 6 h earlier (5 h from ${formatDateHeading('2026-10-27').dayMonth})`
     );
   });
 });

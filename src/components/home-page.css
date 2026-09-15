@@ -1011,6 +1011,29 @@
   font-size: var(--ui-small, 14px);
 }
 
+.d-organizer-unlock [data-organizer-unlock-retry] {
+  margin-top: 8px;
+}
+
+.d-shell-link-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block: 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md, 14px);
+  background: var(--paper-2);
+}
+
+.d-shell-link-check p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--ui-small, 14px);
+}
+
 @media (max-width: 768px) {
   .d-shell-share-box > div {
     flex-wrap: wrap;
