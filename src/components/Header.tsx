@@ -42,12 +42,12 @@ export const Header: React.FC<HeaderProps> = ({
             id="brand-home-link"
             href="/"
             onClick={handleHomeClick}
-            aria-label="edulab, home"
+            aria-label="meet-me, home"
             aria-disabled={isBusy ? 'true' : undefined}
             className="d-shell-brand"
           >
             <img className="edu-logo" alt="" src="/edulab-mark-ink.png" />
-            <span className="edu-wordmark">edulab</span>
+            <span className="edu-wordmark">meet-me</span>
           </a>
           <span className="d-shell-context">Meeting scheduler</span>
           {poll?.finalizedSlot && (
