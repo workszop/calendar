@@ -985,7 +985,6 @@ export default function App() {
 
       <header className="d-shell-page-head">
         <div>
-          <p className="d-shell-kicker">Meeting workspace</p>
           <h1 className="app-title">{poll.title}</h1>
           {poll.description && <p className="edu-lead">{poll.description}</p>}
         </div>
@@ -1210,7 +1209,6 @@ export default function App() {
         ) : screen === 'created' && createdPoll ? (
           <section className="d-shell-share-ready" data-share-ready="true" aria-labelledby="share-ready-title">
             <div className="d-shell-success-mark" aria-hidden="true">✓</div>
-            <p className="d-shell-kicker">Poll created</p>
             <h1 id="share-ready-title">Your poll is ready to share.</h1>
             <p>Send the link to your group. The meeting is not booked until you choose a time.</p>
             <div className="d-shell-share-box">

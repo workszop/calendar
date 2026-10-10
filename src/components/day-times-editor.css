@@ -49,11 +49,20 @@
   font-weight: 600;
 }
 
+.day-times-range-control > span {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
 .day-times-range-control select {
   min-height: 2.55rem;
   min-width: 0;
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--ink);
@@ -198,7 +207,7 @@
   align-self: start;
   width: var(--group-icon-size);
   height: var(--group-icon-size);
-  color: var(--blue);
+  color: var(--blue-600);
 }
 
 .day-times-weekday {
@@ -236,7 +245,7 @@
   gap: 0.3rem;
   min-height: 2rem;
   padding: 0.35rem 0.5rem;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--ink-2);
@@ -326,7 +335,16 @@
    state remains unchanged. */
 .day-times-slot-cell:has(.day-times-cell--selected) {
   padding-block: 0;
-  border-bottom-color: var(--yellow-600);
+}
+
+/* Inside a run the row hairline is hidden and the cell reaches 1px down over
+   it, so the seam is fill, never a coloured line wider than the block. */
+.day-times-slot-cell:has(.day-times-cell--selected:not(.day-times-cell--range-end)) {
+  border-bottom-color: transparent;
+}
+
+.day-times-cell--selected:not(.day-times-cell--range-end) {
+  margin-bottom: -1px;
 }
 
 .day-times-cell--selected {
@@ -426,7 +444,7 @@
   gap: 0.5rem;
   min-height: 2.5rem;
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--ink-2);
@@ -443,7 +461,7 @@
 .day-times-copy-destination input {
   width: 1rem;
   height: 1rem;
-  accent-color: var(--blue);
+  accent-color: var(--blue-600);
 }
 
 .day-times-copy-actions {
@@ -462,7 +480,7 @@
 }
 
 .day-times-copy-cancel {
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink-2);
 }
@@ -481,7 +499,7 @@
 
 .day-times-error {
   margin: 0.55rem 0 0;
-  color: var(--red);
+  color: var(--red-600);
   font-size: var(--ui-small);
   font-weight: 600;
 }

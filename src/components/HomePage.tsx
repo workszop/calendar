@@ -105,7 +105,6 @@ export const HomePage: React.FC<HomePageProps> = ({
     <section className="d-home-page" data-screen="home" data-home-filter={filter}>
       <header className="d-home-page-head">
         <div>
-          <p className="d-home-kicker">Your workspace</p>
           <h1 className="d-home-title"><CalendarDays aria-hidden="true" />Meetings</h1>
           <p className="d-home-lead">A shared place to find a time that works.</p>
         </div>

@@ -20,7 +20,7 @@
   gap: .75rem;
   flex-wrap: wrap;
   padding: .45rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   background: var(--group-sand);
 }
@@ -37,7 +37,7 @@
   gap: .75rem;
   min-height: 2.75rem;
   padding: .65rem .85rem;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--ink-2);
@@ -64,7 +64,7 @@
 .d-calendar-summary-icon {
   width: .9rem;
   height: .9rem;
-  color: var(--blue);
+  color: var(--blue-600);
   flex: 0 0 auto;
 }
 
@@ -79,8 +79,9 @@
 }
 
 .d-calendar-disclosure summary:focus-visible {
-  outline: 3px solid var(--yellow);
+  outline: 3px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 
 .d-calendar-disclosure-badge {
@@ -100,7 +101,7 @@
   flex-wrap: wrap;
   margin-top: .5rem;
   padding: .75rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   background: var(--paper-2);
 }
@@ -138,8 +139,9 @@
 .d-calendar-filter-button:focus-visible,
 .d-calendar-primary-action:focus-visible,
 .d-calendar-cell:focus-visible {
-  outline: 3px solid var(--yellow);
+  outline: 3px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 
 .d-calendar-legend-disclosure {
@@ -176,8 +178,8 @@
 }
 
 .d-calendar-swatch--all {
-  border-color: var(--green);
-  background: var(--green);
+  border-color: var(--green-soft);
+  background: var(--green-soft);
 }
 
 .d-calendar-legend-icon {
@@ -196,7 +198,7 @@
 .d-calendar-grid-panel,
 .d-calendar-inspector,
 .d-calendar-empty {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -229,7 +231,7 @@
 .d-calendar-panel-icon {
   width: var(--group-icon-size);
   height: var(--group-icon-size);
-  color: var(--blue);
+  color: var(--blue-600);
   flex: 0 0 auto;
 }
 
@@ -271,7 +273,7 @@
   width: 1rem;
   height: 1rem;
   flex: 0 0 auto;
-  color: var(--blue);
+  color: var(--blue-600);
 }
 
 .d-calendar-timezone-hint {
@@ -394,8 +396,8 @@
 }
 
 .d-calendar-cell--all {
-  border-color: var(--green);
-  background: var(--green);
+  border-color: var(--green-soft);
+  background: var(--green-soft);
   color: var(--green-ink);
 }
 
@@ -437,8 +439,8 @@
 }
 
 .d-calendar-cell--available {
-  border-color: var(--green);
-  background: var(--green);
+  border-color: var(--green-soft);
+  background: var(--green-soft);
   color: var(--green-ink);
 }
 
@@ -497,7 +499,7 @@
 
 .d-calendar-inspector-count {
   margin: .75rem 0 1rem;
-  color: var(--green);
+  color: var(--green-600);
   font-size: var(--ui-small, .875rem);
   font-weight: 700;
 }
@@ -528,7 +530,7 @@
 .d-calendar-person-icon {
   width: .85rem;
   height: .85rem;
-  color: var(--green);
+  color: var(--green-600);
   flex: 0 0 auto;
 }
 
@@ -545,7 +547,7 @@
 
 .d-calendar-confirmed {
   margin: 1rem 0 0;
-  color: var(--green);
+  color: var(--green-600);
   font-size: var(--ui-small, .875rem);
   font-weight: 600;
 }
@@ -573,7 +575,7 @@
 
 .d-calendar-meeting-count {
   margin: .15rem 0 0;
-  color: var(--green);
+  color: var(--green-600);
   font-size: var(--ui-small, .875rem);
   font-weight: 700;
 }
@@ -729,7 +731,7 @@
   display: grid;
   gap: .35rem;
   padding: .45rem .55rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   background: var(--surface);
 }
@@ -797,8 +799,9 @@
 .d-answer-brush:focus-visible,
 .d-answer-form input:focus-visible,
 .d-answer-form button:focus-visible {
-  outline: 3px solid var(--yellow);
+  outline: 3px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 
 .d-answer-disclosure-content {
@@ -820,7 +823,7 @@
   align-items: center;
   gap: .35rem;
   padding: .45rem .75rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--ink-2);
@@ -840,8 +843,8 @@
 }
 
 .d-answer-brush--available[aria-checked='true'] {
-  border-color: var(--green);
-  background: var(--green);
+  border-color: var(--green-soft);
+  background: var(--green-soft);
   color: var(--green-ink);
 }
 
@@ -903,7 +906,7 @@
 .d-answer-email-flow {
   width: min(100%, 34rem);
   padding: .85rem 1rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -941,16 +944,19 @@
 }
 
 .d-answer-field label {
-  color: var(--ink-2);
-  font-size: var(--ui-small, .875rem);
-  font-weight: 600;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
 }
 
 .d-answer-field input {
   width: 100%;
   min-height: 2.75rem;
   padding: .6rem .75rem;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   background: var(--paper-2);
   color: var(--ink);
@@ -985,7 +991,7 @@
 }
 
 .d-answer-secondary-action {
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink-2);
 }
@@ -1027,13 +1033,13 @@
 }
 
 .d-answer-form[data-save-state='saved'] .d-answer-save-status {
-  color: var(--green);
+  color: var(--green-600);
   font-weight: 600;
 }
 
 .d-answer-form[data-save-state='error'] .d-answer-save-status,
 .d-answer-name-error {
-  color: var(--red);
+  color: var(--red-600);
   font-size: var(--ui-small, .875rem);
   font-weight: 600;
 }
@@ -1085,7 +1091,7 @@
 }
 
 .d-calendar-finalize-count {
-  color: var(--green);
+  color: var(--green-600);
   font-size: var(--ui-caption, .75rem);
   font-weight: 700;
 }

@@ -363,7 +363,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
             <summary>Add location, notes or organizer details (optional)</summary>
             <div className="d-create-optional-grid">
               <label htmlFor="create-page-location">
-                Location <span className="d-create-optional-label">(optional)</span>
+                <span className="d-create-field-label">Location <span className="d-create-optional-label">(optional)</span></span>
                 <input
                   id="create-page-location"
                   type="text"
@@ -376,7 +376,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                 />
               </label>
               <label htmlFor="create-page-organizer-name">
-                Your name <span className="d-create-optional-label">(optional)</span>
+                <span className="d-create-field-label">Your name <span className="d-create-optional-label">(optional)</span></span>
                 <input
                   id="create-page-organizer-name"
                   type="text"
@@ -389,7 +389,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                 />
               </label>
               <label htmlFor="create-page-description" className="d-create-wide">
-                Notes <span className="d-create-optional-label">(optional)</span>
+                <span className="d-create-field-label">Notes <span className="d-create-optional-label">(optional)</span></span>
                 <textarea
                   id="create-page-description"
                   rows={3}
@@ -402,7 +402,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
                 />
               </label>
               <label htmlFor="create-page-organizer-email" className="d-create-wide">
-                Your email <span className="d-create-optional-label">(optional)</span>
+                <span className="d-create-field-label">Your email <span className="d-create-optional-label">(optional)</span></span>
                 <input
                   id="create-page-organizer-email"
                   type="email"

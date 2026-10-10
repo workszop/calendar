@@ -52,7 +52,7 @@
   min-height: 28px;
   padding: 5px 10px;
   border-radius: var(--r-pill, 999px);
-  background: var(--green);
+  background: var(--green-soft);
   color: var(--green-ink, var(--paper));
   font-size: var(--ui-caption, 12px);
   font-weight: 700;
@@ -92,6 +92,8 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--line-2);
 }
 
 .d-shell-kicker {
@@ -178,7 +180,7 @@
 }
 
 .d-shell-disclosure {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md, 14px);
   background: var(--paper);
 }
@@ -232,7 +234,7 @@
 .d-shell-grid-settings span {
   min-height: 40px;
   padding: 9px 14px;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-pill, 999px);
   color: var(--ink-2);
   font-size: var(--ui-small, 14px);
@@ -246,8 +248,9 @@
 }
 
 .d-shell-grid-settings input:focus-visible + span {
-  outline: 3px solid var(--yellow);
+  outline: 3px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 
 .d-shell-disclosure-body > p {
@@ -303,7 +306,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm, 10px);
   background: var(--paper-2);
 }
@@ -341,7 +344,7 @@
 
 .d-shell-participant button:hover {
   background: color-mix(in srgb, var(--red) 10%, var(--paper));
-  color: var(--red);
+  color: var(--red-600);
 }
 
 .d-shell-participant svg {
@@ -360,7 +363,7 @@
 }
 
 .d-shell-danger-action {
-  color: var(--red);
+  color: var(--red-600);
 }
 
 .d-shell-loading,
@@ -397,7 +400,7 @@
 .d-shell-error-state svg {
   width: 34px;
   height: 34px;
-  color: var(--red);
+  color: var(--red-600);
 }
 
 .d-shell-error-state h2 {
@@ -420,7 +423,7 @@
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--green-soft);
   color: var(--green-ink, var(--paper));
   font-size: var(--ui-heading, 24px);
   font-weight: 700;
@@ -443,16 +446,19 @@
   width: 100%;
   margin-top: 12px;
   padding: 20px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md, 14px);
 }
 
 .d-shell-share-box label {
   display: block;
   margin-bottom: 8px;
-  color: var(--ink-2);
-  font-size: var(--ui-small, 14px);
-  font-weight: 600;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
 }
 
 .d-shell-share-box > div {
@@ -482,15 +488,8 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-}
-
-.d-home-kicker {
-  margin: 0 0 8px;
-  color: var(--ink-2);
-  font-size: var(--ui-caption, 12px);
-  font-weight: 600;
-  letter-spacing: .08em;
-  text-transform: uppercase;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--line-2);
 }
 
 .d-home-title {
@@ -499,14 +498,16 @@
   gap: 0.5em;
   margin: 0;
   color: var(--ink);
-  font-size: var(--ui-title, clamp(30px, 3vw, 42px));
-  line-height: 1.1;
+  font-size: var(--ui-page-title, clamp(2.3rem, 5vw, 3.3rem));
+  font-weight: 800;
+  letter-spacing: -.025em;
+  line-height: 1.05;
 }
 
 .d-home-title > svg {
   width: 1em;
   height: 1em;
-  color: var(--blue);
+  color: var(--blue-600);
 }
 
 .d-home-create > svg {
@@ -515,9 +516,10 @@
 }
 
 .d-home-lead {
-  margin: 10px 0 0;
+  margin: 14px 0 0;
   color: var(--ink-2);
-  font-size: var(--ui-body, 16px);
+  font-size: var(--ui-lead, 1.15rem);
+  line-height: 1.6;
 }
 
 .d-home-create,
@@ -542,7 +544,7 @@
 
 .d-home-error p {
   margin: 0;
-  color: var(--red);
+  color: var(--red-600);
   font-size: var(--ui-small, 14px);
 }
 
@@ -553,7 +555,7 @@
   gap: 16px;
   padding: 12px;
   background: var(--group-sand);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
 }
 
@@ -607,7 +609,7 @@
   min-height: 44px;
   padding-left: 40px;
   padding-right: 12px;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-pill);
   background: var(--paper);
   color: var(--ink);
@@ -721,7 +723,7 @@
 }
 
 .d-home-status-pill.agreed {
-  background: var(--green);
+  background: var(--green-soft);
   color: var(--green-ink, var(--paper));
 }
 
@@ -778,7 +780,7 @@
 
 .d-home-empty-symbol:hover { background: var(--yellow); }
 .d-home-empty-symbol > svg { width: var(--ui-title); height: var(--ui-title); }
-.d-home-empty-symbol:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+.d-home-empty-symbol:focus-visible { outline: 3px solid transparent; outline-offset: 2px; box-shadow: var(--focus-ring); }
 
 .d-home-empty h2,
 .d-home-list-error h2,
@@ -1007,7 +1009,7 @@
 
 .d-organizer-unlock-error {
   margin: 8px 0 0;
-  color: var(--red);
+  color: var(--red-600);
   font-size: var(--ui-small, 14px);
 }
 

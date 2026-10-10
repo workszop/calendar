@@ -1,5 +1,4 @@
 /* ─── edulab "Editorial Color" foundation ─── */
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 /* ─── Tailwind v4 theme remap → edulab tokens ───
@@ -63,19 +62,20 @@
   --color-emerald-950: #1C1917;
 
   /* green - solid secondary */
-  --color-green-500: #00A651;
-  --color-green-600: #009444;
-  --color-green-700: #00753A;
+  --color-green-500: #078342;
+  --color-green-600: #078342;
+  --color-green-700: #06733A;
 
   /* blue - secondary */
-  --color-blue-500: #1E8FC2;
+  --color-blue-500: #177AA8;
   --color-blue-600: #177AA8;
+  --color-blue-700: #146A92;
 
   /* red - danger */
   --color-red-400: #E5322D;
-  --color-red-500: #E5322D;
+  --color-red-500: #C92823;
   --color-red-600: #C92823;
-  --color-red-700: #C92823;
+  --color-red-700: #B3261E;
 
   /* radii - generous */
   --radius-md: 8px;
@@ -97,14 +97,15 @@
   --paper: #FFFFFF; --paper-2: #F5F3F0; --paper-3: #EAE6E0; --surface: #FFFFFF;
   --ink: #1C1917; --ink-2: #44403C; --ink-3: #625B53; --line: #E0DBD3; --line-2: #C9C2B7; --line-strong: #857C69; /* control borders >= 3:1 */ --track: color-mix(in srgb, var(--ink) 24%, transparent);
   --yellow: #FFD500; --yellow-600: #F0C800; --yellow-ink: #1C1917;
-  --blue: #1E8FC2; --blue-ink: #FFFFFF;
-  --green: #00A651; --green-ink: #FFFFFF;
-  --red: #E5322D; --red-ink: #FFFFFF;
+  --blue: #1E8FC2; --blue-600: #177AA8; --blue-soft: #177AA8; --blue-ink: #FFFFFF;
+  --green: #00A651; --green-600: #078342; --green-soft: #078342; --green-ink: #FFFFFF;
+  --red: #E5322D; --red-600: #C92823; --red-soft: #C92823; --red-ink: #FFFFFF;
   --ui-body: 16px; --ui-small: 14px; --ui-caption: 12px;
   --ui-title: clamp(30px, 3vw, 42px); --ui-heading: 24px;
+  --ui-page-title: clamp(2.3rem, 5vw, 3.3rem); --ui-lead: 1.15rem;
   --ui-align: left; --ui-center: center; --ui-end: right;
   --page-gutter: clamp(16px, 3vw, 42px);
-  --header-surface: color-mix(in srgb, var(--paper) 94%, transparent);
+  --header-surface: var(--paper);
   --header-logo-size: 48px;
   --header-padding-block: 8px;
   --header-row-height: calc(var(--header-logo-size) + 2 * var(--header-padding-block));
@@ -130,15 +131,14 @@
     font-size: var(--ui-body); text-align: var(--ui-align);
   }
   h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.02em; }
-  :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+  :focus-visible { outline: 3px solid transparent; outline-offset: 2px; box-shadow: var(--focus-ring); }
 }
 
 /* ─── App chrome ─── */
 .edu-header {
   position: sticky; top: 0; z-index: 30; width: 100%;
   background: var(--header-surface);
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-2);
 }
 .edu-header-inner {
   width: 100%; padding: var(--header-padding-block) var(--page-gutter);
@@ -149,10 +149,10 @@
 
 .app-title {
   font-family: var(--font-display); font-weight: 800;
-  font-size: var(--ui-title); letter-spacing: -.025em;
-  line-height: 1.05; color: var(--ink);
+  font-size: var(--ui-page-title); letter-spacing: -.025em;
+  line-height: 1.05; color: var(--ink); margin: 0;
 }
-.edu-lead { font-size: 1.0625rem; color: var(--ink-2); margin: 0; }
+.edu-lead { font-size: var(--ui-lead); line-height: 1.6; color: var(--ink-2); margin: 14px 0 0; }
 
 /* ─── Components ─── */
 /* Kept in the components layer so Tailwind utilities (px-5, w-auto, ...)
@@ -164,25 +164,24 @@
     padding: 10px 14px;
     font-size: var(--ui-small);
     background: var(--surface);
-    border: 1px solid var(--line-2);
+    border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     font-weight: 500;
     color: var(--ink);
   }
-  /* Keeps the base 3px outline; the halo and border are extra affordance. */
   .edu-input:focus-visible {
     box-shadow: var(--focus-ring);
-    border-color: var(--yellow);
+    border-color: var(--ink);
   }
 
   .edu-label {
     display: block;
-    font-family: var(--font-sans);
-    font-size: var(--ui-small);
-    font-weight: 600;
-    text-transform: none;
-    letter-spacing: normal;
-    color: var(--ink-2);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--ink);
     margin-bottom: 8px;
   }
 
@@ -210,8 +209,8 @@
 
   .edu-btn-secondary {
     background: var(--surface);
-    color: var(--ink-2);
-    border: 1px solid var(--line-2);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
   }
   .edu-btn-secondary:hover { background: var(--paper-2); border-color: var(--ink-3); }
   .edu-btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
