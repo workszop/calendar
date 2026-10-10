@@ -16,14 +16,14 @@
 
   /* paper / ink */
   --color-white: #FFFFFF;
-  --color-stone-50: #FBF7E6;
-  --color-stone-100: #F5EDCB;
-  --color-stone-200: #EDE7D2;
-  --color-stone-300: #DDD4B6;
-  --color-stone-400: #948C82;
-  --color-stone-500: #57534E;
-  --color-stone-600: #57534E;
-  --color-stone-700: #57534E;
+  --color-stone-50: #F5F3F0;
+  --color-stone-100: #EAE6E0;
+  --color-stone-200: #E0DBD3;
+  --color-stone-300: #C9C2B7;
+  --color-stone-400: #625B53;
+  --color-stone-500: #44403C;
+  --color-stone-600: #44403C;
+  --color-stone-700: #44403C;
   --color-stone-800: #1C1917;
   --color-stone-900: #1C1917;
   --color-stone-950: #1C1917;
@@ -85,17 +85,17 @@
   --radius-3xl: 28px;
 
   /* elevation - warm, low, soft */
-  --shadow-xs: 0 1px 2px rgba(33,30,26,.06), 0 1px 1px rgba(33,30,26,.04);
-  --shadow-sm: 0 1px 2px rgba(33,30,26,.06), 0 1px 1px rgba(33,30,26,.04);
-  --shadow-md: 0 4px 16px rgba(33,30,26,.08), 0 1px 3px rgba(33,30,26,.05);
+  --shadow-xs: 0 1px 2px rgba(33,30,26,.10), 0 2px 6px rgba(33,30,26,.06);
+  --shadow-sm: 0 1px 2px rgba(33,30,26,.10), 0 2px 6px rgba(33,30,26,.06);
+  --shadow-md: 0 6px 18px rgba(33,30,26,.12), 0 1px 3px rgba(33,30,26,.08);
   --shadow-lg: 0 16px 40px rgba(33,30,26,.12), 0 3px 8px rgba(33,30,26,.06);
   --shadow-xl: 0 16px 40px rgba(33,30,26,.12), 0 3px 8px rgba(33,30,26,.06);
 }
 
 /* ─── Semantic tokens (edulab names, for non-utility CSS) ─── */
 :root {
-  --paper: #FFFFFF; --paper-2: #FBF7E6; --paper-3: #F5EDCB; --surface: #FFFFFF;
-  --ink: #1C1917; --ink-2: #57534E; --ink-3: #948C82; --line: #EDE7D2; --line-2: #DDD4B6;
+  --paper: #FFFFFF; --paper-2: #F5F3F0; --paper-3: #EAE6E0; --surface: #FFFFFF;
+  --ink: #1C1917; --ink-2: #44403C; --ink-3: #625B53; --line: #E0DBD3; --line-2: #C9C2B7; --line-strong: #857C69; /* control borders >= 3:1 */ --track: color-mix(in srgb, var(--ink) 24%, transparent);
   --yellow: #FFD500; --yellow-600: #F0C800; --yellow-ink: #1C1917;
   --blue: #1E8FC2; --blue-ink: #FFFFFF;
   --green: #00A651; --green-ink: #FFFFFF;
@@ -109,7 +109,7 @@
   --header-padding-block: 8px;
   --header-row-height: calc(var(--header-logo-size) + 2 * var(--header-padding-block));
   --r-xs: 6px; --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 28px; --r-pill: 999px;
-  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--yellow) 45%, transparent);
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 5px var(--ink);
   --scrim: color-mix(in srgb, var(--ink) 55%, transparent);
   --group-sand: var(--paper-2);
   --group-blue-tint: color-mix(in srgb, var(--blue) 7%, var(--surface));
