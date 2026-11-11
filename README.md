@@ -123,8 +123,8 @@ a new poll is never already past that window. The window is `RETENTION_DAYS` in
 `server/retention.ts`.
 
 The sweep checks 10 polls at a time in a new random order on every run and
-stops taking new polls after 20 seconds (the `CLEANUP_TIME_BUDGET_MS`
-environment variable changes this), well inside
+stops taking new polls after 20 seconds (on Netlify the
+`CLEANUP_TIME_BUDGET_MS` environment variable changes this), well inside
 Netlify's 30-second limit for scheduled functions. Polls it did not reach are
 logged as "left for the next run" and get their turn on a later run. A failed
 check of one poll is logged and counted without stopping the sweep.

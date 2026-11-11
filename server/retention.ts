@@ -40,7 +40,8 @@ export function isPollRetired(poll: Poll, now: Date): boolean {
 /**
  * Wraps a store so retired polls are invisible to every read. A write aimed at
  * a retired poll deletes it instead and reports it missing; the scheduled
- * cleanup covers polls nobody touches.
+ * cleanup covers polls nobody touches. That cleanup must be given the
+ * unwrapped store: through this wrapper it would see no retired poll at all.
  */
 export function withRetention(store: PollStore, clock: Clock = () => new Date()): PollStore {
   const visible = (poll: Poll | null) => (poll && !isPollRetired(poll, clock()) ? poll : null);
