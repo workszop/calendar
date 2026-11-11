@@ -19,17 +19,17 @@ function cell(date: string, time: string): HTMLButtonElement {
   return result;
 }
 
-function DraftHarness({ initiallyEmpty = true, dates = DATES }: { initiallyEmpty?: boolean; dates?: string[] }) {
-  const draft = useProposalDraft(9, 17, initiallyEmpty);
+function DraftHarness({ dates = DATES }: { dates?: string[] }) {
+  const draft = useProposalDraft(9, 17);
   useEffect(() => {
     draft.setDates(dates);
   }, [dates]);
   return <DayTimesEditor draft={draft} idPrefix="day-times" />;
 }
 
-describe('useProposalDraft initially-empty mode', () => {
-  it('leaves new days and newly visible rows empty without changing legacy mode', () => {
-    const empty = renderHook(() => useProposalDraft(9, 17, true));
+describe('useProposalDraft', () => {
+  it('leaves new days and newly visible rows empty, and drops picks outside a narrowed range', () => {
+    const empty = renderHook(() => useProposalDraft(9, 17));
     act(() => empty.result.current.setDates([DATES[0]]));
     expect(empty.result.current.proposed[DATES[0]]).toEqual([]);
 
@@ -38,11 +38,9 @@ describe('useProposalDraft initially-empty mode', () => {
     expect(empty.result.current.gridTimes[0]).toBe('08:00');
     expect(empty.result.current.gridTimes.at(-1)).toBe('17:30');
 
-    const legacy = renderHook(() => useProposalDraft(9, 17));
-    act(() => legacy.result.current.setDates([DATES[0]]));
-    expect(legacy.result.current.proposed[DATES[0]]).toHaveLength(16);
-    act(() => legacy.result.current.changeRange(8, 18));
-    expect(legacy.result.current.proposed[DATES[0]]).toHaveLength(20);
+    act(() => empty.result.current.setProposed({ [DATES[0]]: ['08:00', '10:00'] }));
+    act(() => empty.result.current.changeRange(9, 18));
+    expect(empty.result.current.proposed[DATES[0]]).toEqual(['10:00']);
   });
 });
 
@@ -284,7 +282,7 @@ describe('DayTimesEditor', () => {
 
   it('publishes invalid state through alert and described-by contracts', () => {
     function ErrorHarness() {
-      const draft = useProposalDraft(9, 17, true);
+      const draft = useProposalDraft(9, 17);
       return <DayTimesEditor draft={draft} idPrefix="error-editor" error="Choose at least one time." />;
     }
 

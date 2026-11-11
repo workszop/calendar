@@ -138,6 +138,8 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
   const report: CleanupReport = { removed: 0, checked: 0, failed: 0, remaining: 0 };
 
   const queue = shuffled(await store.listIds(), options.random ?? Math.random);
+  // A store that can delete in one write gets the retired polls together at the end.
+  const batch: string[] = [];
   const worker = async () => {
     while (queue.length && !outOfTime()) {
       const id = queue.pop()!;
@@ -145,8 +147,12 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
       try {
         const poll = await store.get(id);
         if (poll && isPollRetired(poll, clock())) {
-          await store.delete(id);
-          report.removed += 1;
+          if (store.deleteMany) {
+            batch.push(id);
+          } else {
+            await store.delete(id);
+            report.removed += 1;
+          }
         }
       } catch (err) {
         report.failed += 1;
@@ -155,6 +161,15 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
+  if (store.deleteMany && batch.length) {
+    try {
+      await store.deleteMany(batch);
+      report.removed += batch.length;
+    } catch (err) {
+      report.failed += batch.length;
+      console.error(`Poll cleanup: deleting ${batch.length} poll(s) failed:`, err);
+    }
+  }
   report.remaining = queue.length;
   return report;
 }

@@ -118,7 +118,11 @@ describe('retention store wrapper', () => {
       const file = path.join(dir, 'polls.json');
       fs.writeFileSync(file, JSON.stringify([...seed, { ...makePoll('legacy', ['2026-12-01']), organizerCodeHash: undefined }]));
       const store = createFilePollStore(file);
+      // Both retired polls leave in one rewrite of the file, not one each.
+      const rewrites = vi.spyOn(fs, 'renameSync');
       expect((await cleanupExpiredPolls(store, { clock })).removed).toBe(2);
+      expect(rewrites).toHaveBeenCalledTimes(1);
+      rewrites.mockRestore();
       expect((await store.listIds()).sort()).toEqual(['future', 'recent']);
       const before = fs.statSync(file).mtimeMs;
       expect((await cleanupExpiredPolls(store, { clock })).removed).toBe(0);

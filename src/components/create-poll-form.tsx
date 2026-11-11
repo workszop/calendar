@@ -158,7 +158,7 @@ export function useCreatePollForm(): CreatePollFormController {
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [creatorName, setCreatorName] = useState(storedUser.name);
   const [creatorEmail, setCreatorEmail] = useState(storedUser.email);
-  const draft = useProposalDraft(DEFAULT_CREATE_START_HOUR, DEFAULT_CREATE_END_HOUR, true);
+  const draft = useProposalDraft(DEFAULT_CREATE_START_HOUR, DEFAULT_CREATE_END_HOUR);
 
   return {
     title,

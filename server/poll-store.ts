@@ -31,6 +31,11 @@ export interface PollStore {
   update<T>(id: string, fn: PollUpdater<T>): Promise<T | null>;
   /** Removes the poll if it exists. */
   delete(id: string): Promise<void>;
+  /**
+   * Removes several polls in one write. Only stores where every delete rewrites
+   * shared state implement it; the retention sweep prefers it when present.
+   */
+  deleteMany?(ids: string[]): Promise<void>;
   /** Ids of every stored poll, for the retention sweep. */
   listIds(): Promise<string[]>;
 }
@@ -148,9 +153,13 @@ export function createFilePollStore(dataFile: string): PollStore {
   }
 
   function readAll(): { polls: Poll[]; unreadable: unknown[] } {
-    ensureDataFile();
-    const stamp = diskStamp();
+    let stamp = diskStamp();
     if (cache && stamp === cacheStamp) return cache;
+    // No stamp means no file yet: create it, then read it like any other.
+    if (!stamp) {
+      ensureDataFile();
+      stamp = diskStamp();
+    }
 
     // Do not turn malformed storage into an empty one. If JSON.parse or the
     // shape check fails, no write can reach savePolls below.
@@ -174,7 +183,6 @@ export function createFilePollStore(dataFile: string): PollStore {
   const readPolls = () => readAll().polls;
 
   function savePolls(polls: Poll[]) {
-    ensureDataFile();
     const { unreadable } = readAll();
     const tempFile = `${dataFile}.tmp`;
     fs.writeFileSync(tempFile, JSON.stringify([...polls.map(encodePoll), ...unreadable], null, 2), "utf-8");
@@ -236,12 +244,14 @@ export function createFilePollStore(dataFile: string): PollStore {
     });
   }
 
-  function remove(id: string): Promise<void> {
+  /** One rewrite of the file however many polls go. */
+  function deleteMany(ids: string[]): Promise<void> {
     return enqueue(() => {
+      const doomed = new Set(ids);
       const polls = readPolls();
+      const kept = polls.filter((poll) => !doomed.has(poll.id));
       // Nothing to remove: no write.
-      if (!polls.some((poll) => poll.id === id)) return;
-      savePolls(polls.filter((poll) => poll.id !== id));
+      if (kept.length !== polls.length) savePolls(kept);
     });
   }
 
@@ -249,5 +259,5 @@ export function createFilePollStore(dataFile: string): PollStore {
     return readPolls().map((poll) => poll.id);
   }
 
-  return { get, getMany, create, update, delete: remove, listIds };
+  return { get, getMany, create, update, delete: (id) => deleteMany([id]), deleteMany, listIds };
 }

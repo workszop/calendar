@@ -41,7 +41,7 @@ export const ExtendPollModal: React.FC<ExtendPollModalProps> = ({ isOpen, onClos
   // New days start empty, like poll creation, so every proposal is deliberate.
   // The grid steps at the poll's own interval: its meeting fit is judged at
   // that interval, so a 15-minute poll needs 15-minute proposals.
-  const draft = useProposalDraft(...initialRange(poll), true, poll.slotInterval);
+  const draft = useProposalDraft(...initialRange(poll), poll.slotInterval);
   const { selectedDates } = draft;
   const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
   const [errors, setErrors] = useState<FormErrors>({});

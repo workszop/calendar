@@ -9,7 +9,7 @@ import { generateTimeSlots, isValidHourWindow } from '../utils/consensus';
 /** Grid step for a poll being created; an existing poll drafts at its own interval. */
 export const DRAFT_SLOT_INTERVAL = 30;
 
-export function rangeTimes(startHour: number, endHour: number, interval = DRAFT_SLOT_INTERVAL): string[] {
+function rangeTimes(startHour: number, endHour: number, interval = DRAFT_SLOT_INTERVAL): string[] {
   return isValidHourWindow(startHour, endHour) ? generateTimeSlots(startHour, endHour, interval) : [];
 }
 
@@ -37,7 +37,6 @@ export interface ProposalDraft {
 export function useProposalDraft(
   initialStart: number,
   initialEnd: number,
-  initiallyEmpty = false,
   slotInterval: Poll['slotInterval'] = DRAFT_SLOT_INTERVAL
 ): ProposalDraft {
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
@@ -46,21 +45,15 @@ export function useProposalDraft(
   // date -> proposed slot starts, edited on the drag grid inside the hour range
   const [proposed, setProposed] = useState<Record<string, string[]>>({});
 
-  const times = (start: number, end: number) => rangeTimes(start, end, slotInterval);
-  const gridTimes = useMemo(() => times(startHour, endHour), [startHour, endHour, slotInterval]);
+  const gridTimes = useMemo(() => rangeTimes(startHour, endHour, slotInterval), [startHour, endHour, slotInterval]);
 
-  // A newly selected date proposes the whole hour range in the legacy mode;
-  // the creation page opts into an empty date so each atomic choice is
+  // A newly selected date proposes nothing, so each atomic choice is
   // deliberate. Proposals are only added or dropped per date, so each toggle
   // can update them independently and quick successive clicks never overwrite
   // each other.
   const setDates = (dates: string[]) => {
     setSelectedDates(dates);
-    setProposed((prev) =>
-      Object.fromEntries(
-        dates.map((d) => [d, prev[d] ?? (initiallyEmpty ? [] : times(startHour, endHour))])
-      )
-    );
+    setProposed((prev) => Object.fromEntries(dates.map((d) => [d, prev[d] ?? []])));
   };
 
   const toggleDate = (date: string) => {
@@ -68,34 +61,21 @@ export function useProposalDraft(
     setProposed((prev) => {
       const next = { ...prev };
       if (next[date]) delete next[date];
-      else next[date] = initiallyEmpty ? [] : times(startHour, endHour);
+      else next[date] = [];
       return next;
     });
   };
 
-  // Changing the range keeps each day's picks inside it. Legacy callers also
-  // propose rows that just became visible, while the creation editor leaves
-  // newly visible rows empty so widening cannot silently add availability.
+  // Changing the range keeps each day's picks inside it. Rows that just became
+  // visible stay empty, so widening cannot silently add availability.
   const changeRange = (nextStart: number, nextEnd: number) => {
     setStartHour(nextStart);
     setEndHour(nextEnd);
     // An inverted range is reported on submit; keep the picks until it is fixed.
     if (!isValidHourWindow(nextStart, nextEnd)) return;
-    const before = new Set(times(startHour, endHour));
-    const after = times(nextStart, nextEnd);
-    const added = after.filter((t) => !before.has(t));
+    const visible = new Set(rangeTimes(nextStart, nextEnd, slotInterval));
     setProposed((prev) =>
-      Object.fromEntries(
-        Object.entries(prev).map(([d, dayTimes]) => [
-          d,
-          [
-            ...new Set([
-              ...dayTimes.filter((t) => after.includes(t)),
-              ...(initiallyEmpty ? [] : added),
-            ]),
-          ].sort(),
-        ])
-      )
+      Object.fromEntries(Object.entries(prev).map(([d, dayTimes]) => [d, dayTimes.filter((t) => visible.has(t))]))
     );
   };
 

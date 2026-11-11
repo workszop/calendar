@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarDays, Check, Copy } from 'lucide-react';
 import type { ProposalDraft } from '../hooks/useProposalDraft';
 import { DRAFT_SLOT_INTERVAL } from '../hooks/useProposalDraft';
 import { addMinutesToTime, formatDateHeading, formatHour, formatTimeSlot } from '../utils/calendar';
 import { slotKey, splitSlotKey } from '../utils/consensus';
-import { useGridStroke } from '../hooks/useGridStroke';
+import { slotKeyOf, useGridStroke } from '../hooks/useGridStroke';
 import { Modal } from './Modal';
 import './day-times-editor.css';
 
@@ -68,6 +68,80 @@ function rangesForDay(times: string[], proposed: string[], slotInterval: number)
   return ranges;
 }
 
+// ─── Cell ───
+// Every prop is a primitive and the pointer, click and key handling lives on the
+// table, so a stroke re-renders only the cells it changed.
+
+interface TimeCellProps {
+  date: string;
+  time: string;
+  endTime: string;
+  selected: boolean;
+  isRangeStart: boolean;
+  isRangeEnd: boolean;
+  label: string;
+  describedBy: string | undefined;
+  disabled: boolean;
+}
+
+const TimeCell = memo(function TimeCell({
+  date,
+  time,
+  endTime,
+  selected,
+  isRangeStart,
+  isRangeEnd,
+  label,
+  describedBy,
+  disabled,
+}: TimeCellProps) {
+  return (
+    <button
+      type="button"
+      data-slot-key={slotKey(date, time)}
+      data-selected={selected ? 'true' : 'false'}
+      data-date={date}
+      data-time={time}
+      data-range-start={isRangeStart ? time : undefined}
+      data-range-end={isRangeEnd ? endTime : undefined}
+      aria-pressed={selected}
+      aria-label={label}
+      aria-describedby={describedBy}
+      title={label}
+      disabled={disabled}
+      // A slot consumes a touch gesture for painting. The surrounding
+      // overflow container remains scrollable from its header/time gutter.
+      style={{ touchAction: 'none' }}
+      className={`day-times-cell${selected ? ' day-times-cell--selected' : ''}${
+        isRangeStart ? ' day-times-cell--range-start' : ''
+      }${isRangeEnd ? ' day-times-cell--range-end' : ''}`}
+    >
+      {selected ? (
+        isRangeStart || isRangeEnd ? (
+          <span
+            className="day-times-boundary-group"
+            data-boundary-group={isRangeStart && isRangeEnd ? 'single-slot' : 'range-edge'}
+            aria-hidden="true"
+          >
+            {isRangeStart && (
+              <span className="day-times-boundary day-times-boundary--start" aria-hidden="true">
+                {formatTimeSlot(time)}
+              </span>
+            )}
+            {isRangeEnd && (
+              <span className="day-times-boundary day-times-boundary--end" aria-hidden="true">
+                {formatTimeSlot(endTime)}
+              </span>
+            )}
+          </span>
+        ) : (
+          <Check className="day-times-check" aria-hidden="true" />
+        )
+      ) : null}
+    </button>
+  );
+});
+
 function rangeText(range: SelectedRange): string {
   return `${range.startTime}-${range.endTime}`;
 }
@@ -108,6 +182,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
   const selectedDates = draft.selectedDates;
   const times = draft.gridTimes;
   const { slotInterval } = draft;
+  const timeSet = useMemo(() => new Set(times), [times]);
   const dateHeadings = useMemo(
     () => new Map(selectedDates.map((date) => [date, formatDateHeading(date)])),
     [selectedDates]
@@ -125,6 +200,20 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
         selectedDates.map((date) => [date, rangesForDay(times, draft.proposed[date] ?? [], slotInterval)])
       ),
     [draft.proposed, selectedDates, times, slotInterval]
+  );
+  // Where each day's runs of proposed times begin and end, for the cell labels.
+  const rangeEdgesByDate = useMemo(
+    () =>
+      new Map(
+        [...rangesByDate].map(([date, ranges]) => [
+          date,
+          {
+            starts: new Set(ranges.map((range) => range.startTime)),
+            ends: new Set(ranges.map((range) => range.endTime)),
+          },
+        ])
+      ),
+    [rangesByDate]
   );
   const startOptions = useMemo(
     () => hourOptions(MIN_HOUR, Math.min(MAX_HOUR, draft.startHour), HOUR_STEP),
@@ -145,7 +234,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     [rangesByDate, selectedDates]
   );
   const selectedCount = selectedDates.reduce(
-    (total, date) => total + (draft.proposed[date] ?? []).filter((time) => times.includes(time)).length,
+    (total, date) => total + (draft.proposed[date] ?? []).filter((time) => timeSet.has(time)).length,
     0
   );
   const errorId = `${idPrefix}-hours-error`;
@@ -185,7 +274,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     keys.forEach((key) => {
       const [date, time] = splitSlotKey(key);
       const day = next[date];
-      if (!day || !times.includes(time)) return;
+      if (!day || !timeSet.has(time)) return;
       if (on) day.add(time);
       else day.delete(time);
     });
@@ -258,7 +347,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     times,
     hasCell: (key) => {
       const [date, time] = splitSlotKey(key);
-      return selectedDates.includes(date) && times.includes(time);
+      return selectedDates.includes(date) && timeSet.has(time);
     },
     disabled,
     onBegin: (key) => {
@@ -352,86 +441,50 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     );
   };
 
-  const renderCell = (date: string, time: string) => {
-    const key = slotKey(date, time);
-    const selected = selectedSets.get(date)?.has(time) ?? false;
-    const ranges = rangesByDate.get(date) ?? [];
-    const range = ranges.find((candidate) => candidate.slotTimes.includes(time));
-    const isRangeStart = Boolean(range && range.startTime === time);
-    const endTime = addMinutesToTime(time, slotInterval);
-    const isRangeEnd = Boolean(range && range.endTime === endTime);
-    const heading = dateHeadings.get(date);
-    const label = `${heading?.full ?? date}, ${formatTimeSlot(time)} – ${formatTimeSlot(endTime)}: ${
-      selected ? 'proposed' : 'not proposed'
-    }`;
+  // A native pointer gesture dispatches click after pointerup, and a key press
+  // can dispatch one after keydown. The stroke or the key handler already
+  // changed the slot, so that follow-up click is dropped.
+  const handleTableClick = (event: React.MouseEvent<HTMLTableElement>) => {
+    const key = slotKeyOf(event.target);
+    if (!key) return;
+    const suppression = suppressClickRef.current;
+    const sameCell = suppressClickKeyRef.current === key;
+    suppressClickRef.current = null;
+    suppressClickKeyRef.current = null;
+    if (suppression === 'pointer' && (event.detail > 0 || sameCell)) return;
+    if (suppression === 'keyboard' && event.detail === 0 && sameCell) return;
+    toggleSlot(...splitSlotKey(key));
+  };
 
+  const handleTableKeyDown = (event: React.KeyboardEvent<HTMLTableElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const key = slotKeyOf(event.target);
+    if (!key) return;
+    event.preventDefault();
+    markClickSuppressed('keyboard');
+    suppressClickKeyRef.current = key;
+    toggleSlot(...splitSlotKey(key));
+  };
+
+  const renderCell = (date: string, time: string) => {
+    const selected = selectedSets.get(date)?.has(time) ?? false;
+    const endTime = addMinutesToTime(time, slotInterval);
+    const edges = rangeEdgesByDate.get(date);
+    const heading = dateHeadings.get(date);
     return (
-      <button
-        type="button"
-        data-slot-key={key}
-        data-selected={selected ? 'true' : 'false'}
-        data-date={date}
-        data-time={time}
-        data-range-start={isRangeStart ? time : undefined}
-        data-range-end={isRangeEnd ? endTime : undefined}
-        aria-pressed={selected}
-        aria-label={label}
-        aria-describedby={error ? errorId : undefined}
-        title={label}
+      <TimeCell
+        date={date}
+        time={time}
+        endTime={endTime}
+        selected={selected}
+        isRangeStart={edges?.starts.has(time) ?? false}
+        isRangeEnd={edges?.ends.has(endTime) ?? false}
+        label={`${heading?.full ?? date}, ${formatTimeSlot(time)} – ${formatTimeSlot(endTime)}: ${
+          selected ? 'proposed' : 'not proposed'
+        }`}
+        describedBy={error ? errorId : undefined}
         disabled={disabled}
-        // A slot consumes a touch gesture for painting. The surrounding
-        // overflow container remains scrollable from its header/time gutter.
-        style={{ touchAction: 'none' }}
-        onClick={(event) => {
-          const suppression = suppressClickRef.current;
-          if (
-            (suppression === 'pointer' && (event.detail > 0 || suppressClickKeyRef.current === key)) ||
-            (suppression === 'keyboard' &&
-              event.detail === 0 &&
-              suppressClickKeyRef.current === key)
-          ) {
-            suppressClickRef.current = null;
-            suppressClickKeyRef.current = null;
-            return;
-          }
-          suppressClickRef.current = null;
-          suppressClickKeyRef.current = null;
-          toggleSlot(date, time);
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          event.preventDefault();
-          markClickSuppressed('keyboard');
-          suppressClickKeyRef.current = key;
-          toggleSlot(date, time);
-        }}
-        className={`day-times-cell${selected ? ' day-times-cell--selected' : ''}${
-          isRangeStart ? ' day-times-cell--range-start' : ''
-        }${isRangeEnd ? ' day-times-cell--range-end' : ''}`}
-      >
-        {selected ? (
-          isRangeStart || isRangeEnd ? (
-            <span
-              className="day-times-boundary-group"
-              data-boundary-group={isRangeStart && isRangeEnd ? 'single-slot' : 'range-edge'}
-              aria-hidden="true"
-            >
-              {isRangeStart && (
-                <span className="day-times-boundary day-times-boundary--start" aria-hidden="true">
-                  {formatTimeSlot(time)}
-                </span>
-              )}
-              {isRangeEnd && (
-                <span className="day-times-boundary day-times-boundary--end" aria-hidden="true">
-                  {formatTimeSlot(endTime)}
-                </span>
-              )}
-            </span>
-          ) : (
-            <Check className="day-times-check" aria-hidden="true" />
-          )
-        ) : null}
-      </button>
+      />
     );
   };
 
@@ -477,6 +530,8 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
             <table
               className="day-times-table"
               {...stroke.tableProps}
+              onClick={handleTableClick}
+              onKeyDown={handleTableKeyDown}
               aria-label="Proposed times by day"
             >
               <thead>
