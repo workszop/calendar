@@ -632,5 +632,6 @@ describe("poll responses on the wire", () => {
     expect(verbose).toBeGreaterThan(RESPONSE_LIMIT_BYTES);
     expect(compact).toBeLessThan(RESPONSE_LIMIT_BYTES);
     expect(decodePoll(JSON.parse(JSON.stringify(encodePoll(publicPoll))))).toEqual(publicPoll);
-  });
+    // A worst-case poll takes about 4 s here, too close to the default 5 s limit.
+  }, 30_000);
 });
