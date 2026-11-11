@@ -366,52 +366,12 @@ describe("blob poll store", () => {
     expect(client.writeCalls).toHaveLength(0);
   });
 
-  it("lists ids across pages and ignores the legacy array key", async () => {
+  it("lists ids across pages and ignores keys outside the poll prefix", async () => {
     const client = new MemoryBlobClient();
     client.seed("polls", [makePoll("poll_old")]);
     const store = createBlobPollStore(client);
     await Promise.all(["poll_1", "poll_2", "poll_3"].map((id) => store.create(makePoll(id))));
     expect((await store.listIds()).sort()).toEqual(["poll_1", "poll_2", "poll_3"]);
-  });
-
-  it("imports kept polls from the legacy array, drops the rest, and deletes the array", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_keep"), makePoll("poll_drop"), makePoll("poll_taken")]);
-    client.seed("poll/poll_taken", { ...makePoll("poll_taken"), title: "newer" });
-    const store = createBlobPollStore(client);
-
-    const result = await store.importLegacyPolls!((poll) => poll.id !== "poll_drop");
-    // poll_taken already had its own blob, so only poll_keep was written.
-    expect(result).toEqual({ imported: 1, dropped: 1, skipped: 0, remaining: 0 });
-    expect(client.keys()).toEqual(["poll/poll_keep", "poll/poll_taken"]);
-    expect((await store.get("poll_taken"))?.title).toBe("newer");
-    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 0, dropped: 0, skipped: 0, remaining: 0 });
-  });
-
-  it("skips and counts malformed legacy entries instead of giving up on the whole array", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a"), null, ["nope"], { id: 7 }, withSlots("poll_bad", { "2027-01-01": "zz" }), makePoll("poll_b")]);
-    const store = createBlobPollStore(client);
-    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 2, dropped: 0, skipped: 4, remaining: 0 });
-    expect(client.keys()).toEqual(["poll/poll_a", "poll/poll_b"]);
-  });
-
-  it("stops the import at its time budget, keeps the array for the next run, and finishes later", async () => {
-    const client = new MemoryBlobClient();
-    const ids = Array.from({ length: 12 }, (_, i) => `poll_${i}`);
-    client.seed("polls", ids.map(makePoll));
-    const store = createBlobPollStore(client, { concurrency: 1 });
-
-    let checks = 0;
-    const first = await store.importLegacyPolls!(() => true, { shouldStop: () => (checks += 1) > 5 });
-    expect(first).toEqual({ imported: 5, dropped: 0, skipped: 0, remaining: 7 });
-    expect(client.keys()).toContain("polls");
-    expect(client.keys().filter((key) => key.startsWith("poll/"))).toHaveLength(5);
-
-    // The next run skips the moved polls (onlyIfNew) and deletes the array once nothing is left.
-    const second = await store.importLegacyPolls!(() => true);
-    expect(second).toEqual({ imported: 7, dropped: 0, skipped: 0, remaining: 0 });
-    expect(client.keys()).toEqual(ids.map((id) => `poll/${id}`).sort());
   });
 
   it("leaves one corrupt blob out of a list read but still fails the single read", async () => {
@@ -427,27 +387,6 @@ describe("blob poll store", () => {
     // A failing transport is not a corrupt record: the list fails as a whole.
     client.readError = new Error("blob transport unavailable");
     await expect(store.getMany(["poll_a"])).rejects.toThrow("blob transport unavailable");
-  });
-
-  it("does not resurrect a legacy poll deleted while the import runs", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a"), makePoll("poll_b")]);
-    const store = createBlobPollStore(client);
-    // The organizer deletes poll_a right after the import has read the array.
-    const read = client.getWithMetadata.bind(client);
-    let deleted = false;
-    client.getWithMetadata = async (key, options) => {
-      const result = await read(key, options);
-      if (key === "polls" && !deleted) {
-        deleted = true;
-        await store.delete("poll_a");
-      }
-      return result;
-    };
-    await expect(store.importLegacyPolls!(() => true)).resolves.toEqual({ imported: 1, dropped: 0, skipped: 0, remaining: 0 });
-    client.getWithMetadata = read;
-    await expect(store.get("poll_a")).resolves.toBeNull();
-    expect(client.keys()).toEqual(["poll/poll_b"]);
   });
 
   // ─── Storage format ───
@@ -512,109 +451,6 @@ describe("blob poll store", () => {
       return true;
     })).resolves.toBe(true);
   }, 60_000);
-
-  // ─── Legacy array read window ───
-
-  it("serves polls still in the legacy array until they are moved", async () => {
-    const client = new MemoryBlobClient();
-    const legacy = makePoll("poll_legacy");
-    legacy.participants.push({ id: "part_a", name: "Ada", timezone: "UTC", updatedAt: "", availability: { "2027-01-01T09:00": "available" } });
-    client.seed("polls", [legacy, makePoll("poll_other")]);
-    const store = createBlobPollStore(client);
-    await store.create(makePoll("poll_new"));
-
-    expect(await store.get("poll_legacy")).toEqual(legacy);
-    expect((await store.getMany(["poll_new", "poll_legacy", "poll_missing", "poll_other"])).map((poll) => poll.id))
-      .toEqual(["poll_new", "poll_legacy", "poll_other"]);
-    await expect(store.get("poll_missing")).resolves.toBeNull();
-    expect(client.writeCalls.filter((call) => call.key === "polls")).toHaveLength(0);
-  });
-
-  it("prefers a poll's own blob over a stale legacy copy", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [{ ...makePoll("poll_a"), title: "stale" }]);
-    client.seed("poll/poll_a", { ...makePoll("poll_a"), title: "current" });
-    expect((await createBlobPollStore(client).get("poll_a"))?.title).toBe("current");
-  });
-
-  it("reads the legacy array once for a whole list request", async () => {
-    const client = new MemoryBlobClient();
-    const ids = Array.from({ length: 20 }, (_, i) => `poll_${i}`);
-    client.seed("polls", ids.map(makePoll));
-    const store = createBlobPollStore(client);
-    expect(await store.getMany(ids)).toHaveLength(20);
-    expect(client.readCalls.filter((call) => call.key === "polls")).toHaveLength(1);
-  });
-
-  it("moves a legacy poll into its own blob on the first write and drops it from the array", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a"), makePoll("poll_b")]);
-    const store = createBlobPollStore(client);
-
-    await expect(store.update("poll_a", (draft) => addParticipant(draft, "ada"))).resolves.toBe(1);
-    expect(client.writeCalls[0]).toMatchObject({ key: "poll/poll_a", options: { onlyIfNew: true } });
-    expect((client.peek("polls") as Poll[]).map((poll) => poll.id)).toEqual(["poll_b"]);
-    expect((await store.get("poll_a"))?.participants).toHaveLength(1);
-
-    // Later writes are ordinary per-poll writes.
-    await expect(store.update("poll_a", (draft) => addParticipant(draft, "bob"))).resolves.toBe(2);
-    expect(client.writeCalls.at(-1)?.options).toEqual({ onlyIfMatch: expect.stringMatching(/^etag-/) });
-  });
-
-  it("moves a legacy poll exactly once when the committed move reports a conflict", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a")]);
-    const store = createBlobPollStore(client, { backoffMs: 1 });
-    client.commitThenReportConflict = true;
-    // Idempotent like a replayed save with the same edit code.
-    const result = await store.update("poll_a", (draft) => {
-      if (!draft.participants.some((p) => p.name === "ada")) addParticipant(draft, "ada");
-      return draft.participants.length;
-    });
-    expect(result).toBe(1);
-    expect((client.peek("poll/poll_a") as Poll).participants).toHaveLength(1);
-    // The array copy may linger (cleanup removes it); the poll's own blob wins.
-    expect((await store.get("poll_a"))?.participants).toHaveLength(1);
-  });
-
-  it("keeps two concurrent first writes to a legacy poll", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a")]);
-    const store = createBlobPollStore(client, { backoffMs: 1 });
-    const other = createBlobPollStore(client, { backoffMs: 1 });
-    await Promise.all([
-      store.update("poll_a", (draft) => addParticipant(draft, "ada")),
-      other.update("poll_a", (draft) => addParticipant(draft, "bob")),
-    ]);
-    expect((await store.get("poll_a"))!.participants.map((p) => p.name).sort()).toEqual(["ada", "bob"]);
-  });
-
-  it("still succeeds when dropping a moved poll from the legacy array loses a race", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a")]);
-    const store = createBlobPollStore(client);
-    const write = client.setJSON.bind(client);
-    client.setJSON = async (key, data, options) => (key === "polls" ? { modified: false } : write(key, data, options));
-    await expect(store.update("poll_a", (draft) => addParticipant(draft, "ada"))).resolves.toBe(1);
-    expect((client.peek("poll/poll_a") as Poll).participants).toHaveLength(1);
-    expect(await store.listIds()).toEqual(["poll_a"]);
-  });
-
-  it("deletes a poll from its blob and from the legacy array", async () => {
-    const client = new MemoryBlobClient();
-    client.seed("polls", [makePoll("poll_a"), makePoll("poll_b")]);
-    client.seed("poll/poll_a", makePoll("poll_a"));
-    const store = createBlobPollStore(client);
-    await expect(store.get("poll_b")).resolves.not.toBeNull();
-
-    await store.delete("poll_a");
-    await store.delete("poll_b");
-    await expect(store.get("poll_a")).resolves.toBeNull();
-    await expect(store.get("poll_b")).resolves.toBeNull();
-    expect(client.peek("polls")).toEqual([]);
-    expect(client.keys()).toEqual(["polls"]);
-  });
-
 });
 
 // ─── Response size ───

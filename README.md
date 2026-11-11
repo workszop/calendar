@@ -58,15 +58,6 @@ contention still persists, the API answers `409` with `retryable: true` instead
 of claiming a successful save. Netlify Functions and Blobs usage is subject to
 your account's limits.
 
-Earlier versions kept every poll in one `polls` array blob. Those polls stay
-available right after deploying this layout: reads fall back to the array for
-ids without a `poll/<id>` blob, and the first save to such a poll moves it into
-its own blob and drops it from the array. Deleting a poll removes it from both.
-Retention applies as usual, so an expired array poll or one without an organizer
-code stays hidden. The daily cleanup then moves the remaining polls worth keeping
-and deletes the array; malformed array entries are skipped and counted in its log.
-Running it right after deploy ("Run now" on `cleanup-polls`) is optional.
-
 After deploying, `/api/health` must return JSON with `status: "ok"` and
 `/api/polls` must return a JSON array (empty without `?ids=`), not an HTML page or 404. Local commands
 continue to use the local JSON file; it is never uploaded automatically.
@@ -136,8 +127,7 @@ stops taking new polls after 20 seconds (the `CLEANUP_TIME_BUDGET_MS`
 environment variable changes this), well inside
 Netlify's 30-second limit for scheduled functions. Polls it did not reach are
 logged as "left for the next run" and get their turn on a later run. A failed
-check of one poll, or a failed move of the old `polls` array, is logged and
-counted without stopping the sweep.
+check of one poll is logged and counted without stopping the sweep.
 
 ## Grid view
 

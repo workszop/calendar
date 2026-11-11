@@ -92,16 +92,8 @@ export interface CleanupOptions {
 }
 
 export interface CleanupReport {
-  /** Polls deleted, including old-layout records not worth keeping. */
+  /** Polls deleted. */
   removed: number;
-  /** Polls moved out of the old layout. */
-  imported: number;
-  /** Old-layout records that were not readable polls. */
-  skipped: number;
-  /** Old-layout records not reached before the time budget ran out. */
-  legacyRemaining: number;
-  /** Whether moving the old layout failed (the sweep still ran). */
-  legacyFailed: boolean;
   /** Stored polls looked at by the sweep. */
   checked: number;
   /** Polls whose check or delete threw. */
@@ -115,11 +107,7 @@ export function formatCleanupReport(report: CleanupReport): string {
   return [
     `Poll cleanup: removed ${report.removed} poll(s) past ${RETENTION_DAYS} days after their last date or without an organizer code`,
     `checked ${report.checked}`,
-    `moved ${report.imported} from the old layout`,
-    `skipped ${report.skipped} malformed old record(s)`,
     ...(report.failed ? [`${report.failed} failed`] : []),
-    ...(report.legacyFailed ? ["legacy import failed"] : []),
-    ...(report.legacyRemaining ? [`${report.legacyRemaining} old-layout record(s) left for the next run`] : []),
     ...(report.remaining ? [`${report.remaining} left for the next run`] : []),
   ].join("; ");
 }
@@ -135,10 +123,8 @@ function shuffled<T>(items: T[], random: () => number): T[] {
 }
 
 /**
- * Deletes retired polls now: imports any old-layout records worth keeping, then
- * sweeps every stored poll with bounded parallelism until the time budget runs
- * out. The import shares that budget, so a large old layout is moved over
- * several runs instead of being cut off before it can delete itself. Each run
+ * Deletes retired polls now: sweeps every stored poll with bounded parallelism
+ * until the time budget runs out. Each run
  * visits polls in a new random order, so polls a run did not reach get their
  * turn on a later one. Failures are logged and counted, never thrown.
  */
@@ -149,29 +135,7 @@ export async function cleanupExpiredPolls(store: PollStore, options: CleanupOpti
   const timeBudgetMs = options.timeBudgetMs ?? DEFAULT_CLEANUP_BUDGET_MS;
   const started = now();
   const outOfTime = () => now() - started >= timeBudgetMs;
-  const report: CleanupReport = {
-    removed: 0,
-    imported: 0,
-    skipped: 0,
-    legacyRemaining: 0,
-    legacyFailed: false,
-    checked: 0,
-    failed: 0,
-    remaining: 0,
-  };
-
-  if (store.importLegacyPolls) {
-    try {
-      const legacy = await store.importLegacyPolls((poll) => !isPollRetired(poll, clock()), { shouldStop: outOfTime });
-      report.removed += legacy.dropped;
-      report.imported = legacy.imported;
-      report.skipped = legacy.skipped;
-      report.legacyRemaining = legacy.remaining;
-    } catch (err) {
-      report.legacyFailed = true;
-      console.error("Poll cleanup: moving the old poll layout failed; sweeping per-poll records anyway:", err);
-    }
-  }
+  const report: CleanupReport = { removed: 0, checked: 0, failed: 0, remaining: 0 };
 
   const queue = shuffled(await store.listIds(), options.random ?? Math.random);
   const worker = async () => {

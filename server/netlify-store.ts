@@ -1,5 +1,5 @@
 import { getStore } from "@netlify/blobs";
-import { createBlobPollStore, type LegacyState } from "./blob-store";
+import { createBlobPollStore } from "./blob-store";
 import type { PollStore } from "./poll-store";
 
 // ─── Netlify Blobs poll store ───
@@ -8,18 +8,9 @@ import type { PollStore } from "./poll-store";
 
 const STORE_NAME = "calendar-polls";
 
-// A store is built per request; what it learned about the legacy array is kept
-// per store name for as long as this function instance stays warm.
-const legacyStates = new Map<string, LegacyState>();
-
 export function createNetlifyPollStore(): PollStore {
   const isPreview = process.env.CONTEXT === "deploy-preview" || process.env.CONTEXT === "branch-deploy";
   if (isPreview && !process.env.DEPLOY_ID) throw new Error("Preview deploy ID is missing");
   const name = isPreview ? `${STORE_NAME}-${process.env.DEPLOY_ID}` : STORE_NAME;
-  let legacyState = legacyStates.get(name);
-  if (!legacyState) {
-    legacyState = { gone: false };
-    legacyStates.set(name, legacyState);
-  }
-  return createBlobPollStore(getStore({ name, consistency: "strong" }), { legacyState });
+  return createBlobPollStore(getStore({ name, consistency: "strong" }));
 }

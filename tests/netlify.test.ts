@@ -195,13 +195,7 @@ describe('Netlify deployment contract', () => {
     const base = { description: '', durationMinutes: 30, timezone: 'UTC', startHour: 9, endHour: 10,
       slotInterval: 30, creatorName: 'Ada', createdAt: '', finalizedSlot: null, participants: [],
       organizerCodeHash: 'a'.repeat(64) };
-    // The old layout: one array blob holding every poll.
-    await store.setJSON('polls', [
-      { ...base, id: 'legacy_expired', title: 'Expired', dates: ['2020-01-01'] },
-      { ...base, id: 'legacy_kept', title: 'Kept', dates: ['2099-10-01'] },
-      { ...base, id: 'legacy_ownerless', title: 'No owner', dates: ['2099-10-01'], organizerCodeHash: undefined },
-      { id: 12345 },
-    ]);
+    await store.setJSON('poll/ownerless', { ...base, id: 'ownerless', title: 'No owner', dates: ['2099-10-01'], organizerCodeHash: undefined });
     await store.setJSON('poll/expired', { ...base, id: 'expired', title: 'Expired', dates: ['2020-01-01'] });
     await store.setJSON('poll/kept', { ...base, id: 'kept', title: 'Kept', dates: ['2099-10-01'] });
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -210,9 +204,8 @@ describe('Netlify deployment contract', () => {
       method: 'POST', body: JSON.stringify({ next_run: '2099-01-01T00:00:00Z' }),
     }));
     expect(response.status).toBe(204);
-    expect(await store.get('polls')).toBeNull();
     const { blobs } = await store.list({ prefix: 'poll/' });
-    expect(blobs.map((blob) => blob.key).sort()).toEqual(['poll/kept', 'poll/legacy_kept']);
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/removed 3 .*moved 1 .*skipped 1 malformed/));
+    expect(blobs.map((blob) => blob.key)).toEqual(['poll/kept']);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/removed 2 .*checked 3/));
   });
 });

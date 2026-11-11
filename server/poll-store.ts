@@ -33,31 +33,6 @@ export interface PollStore {
   delete(id: string): Promise<void>;
   /** Ids of every stored poll, for the retention sweep. */
   listIds(): Promise<string[]>;
-  /**
-   * Moves polls from a pre-per-poll storage layout into per-poll records, keeping
-   * only those `keep` accepts, then deletes the old layout. Malformed old records
-   * are skipped and counted. When `options.shouldStop` answers true the import
-   * stops taking new records, keeps the old layout for a later run and reports
-   * how many records it did not reach. Only stores that ever had another layout
-   * implement it.
-   */
-  importLegacyPolls?(keep: (poll: Poll) => boolean, options?: LegacyImportOptions): Promise<LegacyImportResult>;
-}
-
-export interface LegacyImportOptions {
-  /** Checked before each record; true stops the import early. */
-  shouldStop?: () => boolean;
-}
-
-export interface LegacyImportResult {
-  /** Polls written into their own record by this import. */
-  imported: number;
-  /** Polls `keep` rejected, or with an unusable id. */
-  dropped: number;
-  /** Old records that are not readable polls. */
-  skipped: number;
-  /** Old records not reached before the import was stopped. */
-  remaining: number;
 }
 
 // ─── Store errors ───

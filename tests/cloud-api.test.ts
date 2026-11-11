@@ -2,7 +2,6 @@ import type { Server } from "http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBlobPollStore } from "../server/blob-store";
 import { createApi } from "../server/api";
-import { hashCode } from "../server/auth";
 import { MemoryBlobClient } from "./memory-blob-client";
 
 // A date inside the API's one-year window, whenever the suite runs.
@@ -186,41 +185,6 @@ describe("cloud PollStore API", () => {
       date: FUTURE_DATE, startTime: "10:00", endTime: "10:30",
     }, organizer);
     expect(other.response.status).toBe(409);
-  });
-
-  it("serves and answers a poll that is still in the legacy array, moving it on the first save", async () => {
-    const client = new MemoryBlobClient();
-    const organizerCode = "o".repeat(32);
-    const legacy = {
-      id: "poll_legacy", title: "Before the move", description: "", location: "Online Meeting",
-      durationMinutes: 30, timezone: "UTC", dates: [FUTURE_DATE], startHour: 9, endHour: 10, slotInterval: 30,
-      creatorName: "Ada", createdAt: "", finalizedSlot: null, organizerCodeHash: hashCode(organizerCode),
-      participants: [{ id: "part_old", name: "Old", timezone: "UTC", updatedAt: "", availability: { [`${FUTURE_DATE}T09:00`]: "available" } }],
-    };
-    client.seed("polls", [legacy, { ...legacy, id: "poll_ownerless", organizerCodeHash: undefined }]);
-    const api = await start(createApi(createBlobPollStore(client)));
-    openServers.push(api.server);
-
-    const loaded = await request(api.base, "GET", "/api/polls/poll_legacy");
-    expect(loaded.response.status).toBe(200);
-    expect(loaded.json.participants[0].availability).toEqual({ [`${FUTURE_DATE}T09:00`]: "available" });
-    expect((await request(api.base, "GET", "/api/polls/poll_ownerless")).response.status).toBe(404);
-    const listed = await request(api.base, "GET", "/api/polls?ids=poll_legacy,poll_ownerless");
-    expect(listed.json.map((poll: { id: string }) => poll.id)).toEqual(["poll_legacy"]);
-    const access = await request(api.base, "GET", "/api/polls/poll_legacy/access", undefined, { "X-Organizer-Code": organizerCode });
-    expect(access.json).toEqual({ organizer: true });
-
-    const saved = await request(api.base, "POST", "/api/polls/poll_legacy/respond", {
-      name: "New", availability: { [`${FUTURE_DATE}T09:30`]: "preferred" },
-    });
-    expect(saved.response.status).toBe(200);
-    expect(saved.json.poll.participants).toHaveLength(2);
-    expect(client.keys()).toEqual(["poll/poll_legacy", "polls"]);
-    expect((client.peek("polls") as Array<{ id: string }>).map((poll) => poll.id)).toEqual(["poll_ownerless"]);
-
-    const removed = await request(api.base, "DELETE", "/api/polls/poll_legacy", undefined, { "X-Organizer-Code": organizerCode });
-    expect(removed.response.status).toBe(200);
-    expect((await request(api.base, "GET", "/api/polls/poll_legacy")).response.status).toBe(404);
   });
 
   it("supports the full lifecycle through a blob-backed API", async () => {
