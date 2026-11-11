@@ -184,7 +184,6 @@ export const FinalizedBanner: React.FC<FinalizedBannerProps> = ({ poll, onResetF
         title="Re-open voting?"
         message="The agreed meeting time will be unlocked and participants can vote again."
         confirmLabel="Re-open voting"
-        danger
         onConfirm={() => void handleReset()}
         onCancel={() => setConfirmReopen(false)}
       />

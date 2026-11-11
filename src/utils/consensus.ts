@@ -34,6 +34,12 @@ export function slotKey(date: string, time: string): string {
   return `${date}T${time}`;
 }
 
+/** The [date, time] halves of a slot key. */
+export function splitSlotKey(key: string): [date: string, time: string] {
+  const separator = key.indexOf('T');
+  return [key.slice(0, separator), key.slice(separator + 1)];
+}
+
 // A whole or half hour inside 0-24, e.g. 9, 9.5, 24
 export function isHalfHourValue(h: unknown): h is number {
   return typeof h === 'number' && Number.isFinite(h) && Number.isInteger(h * 2) && h >= 0 && h <= 24;
@@ -242,9 +248,7 @@ export function analyzeWindow(poll: Poll, date: string, timeStr: string, slotTim
     availableCount: availableNames.length,
     preferredCount: preferredNames.length,
     ifNeededCount: ifNeededNames.length,
-    unavailableCount: unavailableNames.length,
     totalParticipants: total,
-    attendanceRate: total > 0 ? availableNames.length / total : 0,
     availableNames,
     preferredNames,
     ifNeededNames,

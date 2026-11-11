@@ -55,18 +55,25 @@ describe('grid view switch', () => {
     await openPoll();
     openCalendarSettings();
     expect((screen.getByRole('radio', { name: '30 min' }) as HTMLInputElement).checked).toBe(true);
-    expect(document.querySelectorAll('tbody tr')).toHaveLength(4);
+    // The answer grid stays mounted (hidden) beside the overview, so each is counted in its own panel.
+    const rows = (panel: 'overview' | 'answer') => document.querySelectorAll(`#tabpanel-${panel} tbody tr`);
+    expect(rows('overview')).toHaveLength(4);
     fireEvent.click(screen.getByRole('radio', { name: '1 hour' }));
-    expect(document.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(rows('overview')).toHaveLength(2);
     fireEvent.click(screen.getByRole('tab', { name: 'My answer' }));
-    expect(document.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(rows('answer')).toHaveLength(2);
     fireEvent.click(screen.getByRole('radio', { name: '30 min' }));
-    fireEvent.keyDown(document.getElementById('paint-slot-2026-10-01T09:00')!, { key: 'Enter' });
+    fireEvent.click(document.getElementById('paint-slot-2026-10-01T09:00')!);
     fireEvent.click(screen.getByRole('radio', { name: '1 hour' }));
     expect(document.getElementById('paint-slot-2026-10-01T09:00')?.getAttribute('data-status')).toBe('mixed');
     fireEvent.click(screen.getByRole('radio', { name: '30 min' }));
     expect(document.getElementById('paint-slot-2026-10-01T09:00')?.getAttribute('data-status')).toBe('available');
     expect(document.getElementById('paint-slot-2026-10-01T09:30')?.getAttribute('data-status')).toBe('none');
+    // A look at the overview and back keeps the unsaved answer.
+    fireEvent.click(screen.getByRole('tab', { name: 'Group overview' }));
+    expect(document.getElementById('tabpanel-answer')?.hidden).toBe(true);
+    fireEvent.click(screen.getByRole('tab', { name: 'My answer' }));
+    expect(document.getElementById('paint-slot-2026-10-01T09:00')?.getAttribute('data-status')).toBe('available');
     expect(screen.getByText('45 min')).toBeTruthy();
     expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
   });

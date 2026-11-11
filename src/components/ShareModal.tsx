@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Copy, Check, Share2, Mail } from 'lucide-react';
 import type { Poll } from '../types';
 import { formatDateHeading } from '../utils/calendar';
+import { pollShareUrl } from '../utils/links';
 import { Modal } from './Modal';
 import { COPIED_LABEL_MS } from '../utils/constants';
 
@@ -42,7 +43,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, poll })
     return clearResetTimers;
   }, [isOpen, clearResetTimers]);
 
-  const shareUrl = `${window.location.origin}${window.location.pathname}?poll=${poll.id}`;
+  const shareUrl = pollShareUrl(poll.id);
 
   const dateList = poll.dates.map((d) => formatDateHeading(d).full).join(', ');
   const inviteMessage = `Hi everyone, please submit your availability for "${poll.title}" (${poll.durationMinutes} min) so we can agree on a time that works for all of us!

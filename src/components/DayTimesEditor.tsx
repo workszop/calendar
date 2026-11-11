@@ -3,7 +3,7 @@ import { CalendarDays, Check, Copy } from 'lucide-react';
 import type { ProposalDraft } from '../hooks/useProposalDraft';
 import { DRAFT_SLOT_INTERVAL } from '../hooks/useProposalDraft';
 import { addMinutesToTime, formatDateHeading, formatHour, formatTimeSlot } from '../utils/calendar';
-import { slotKey } from '../utils/consensus';
+import { slotKey, splitSlotKey } from '../utils/consensus';
 import { useGridStroke } from '../hooks/useGridStroke';
 import { Modal } from './Modal';
 import './day-times-editor.css';
@@ -37,11 +37,6 @@ const MAX_HOUR = 24;
 const HOUR_STEP = DRAFT_SLOT_INTERVAL / 60;
 
 // ─── Helpers ───
-function splitSlotKey(key: string): [string, string] {
-  const separator = key.indexOf('T');
-  return [key.slice(0, separator), key.slice(separator + 1)];
-}
-
 function hourOptions(start: number, end: number, step: number): number[] {
   const values: number[] = [];
   for (let value = start; value <= end + Number.EPSILON; value += step) {
@@ -369,7 +364,6 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     const label = `${heading?.full ?? date}, ${formatTimeSlot(time)} – ${formatTimeSlot(endTime)}: ${
       selected ? 'proposed' : 'not proposed'
     }`;
-    const cellStrokeProps = stroke.cellProps(key);
 
     return (
       <button
@@ -388,13 +382,6 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
         // A slot consumes a touch gesture for painting. The surrounding
         // overflow container remains scrollable from its header/time gutter.
         style={{ touchAction: 'none' }}
-        onPointerDown={(event) => {
-          if (!disabled && (event.pointerType !== 'mouse' || event.button === 0)) {
-            markClickSuppressed('pointer');
-          }
-          cellStrokeProps.onPointerDown(event);
-        }}
-        onPointerEnter={cellStrokeProps.onPointerEnter}
         onClick={(event) => {
           const suppression = suppressClickRef.current;
           if (

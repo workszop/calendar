@@ -14,7 +14,10 @@ export function downloadTextFile(filename: string, content: string, type: string
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** A title reduced to characters that are safe in a file name. */
+/**
+ * A title reduced to characters that are safe in a file name. Letters and digits
+ * of any script are kept, so "Zebranie zarządu" stays readable.
+ */
 export function fileSafeName(title: string): string {
-  return title.replace(/[^a-zA-Z0-9]/g, '_');
+  return title.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') || 'meeting';
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { downloadIcsFile } from '../../src/utils/calendar';
+import { fileSafeName } from '../../src/utils/download';
 import type { Poll } from '../../src/types';
 
 afterEach(() => {
@@ -37,5 +38,15 @@ describe('downloadIcsFile', () => {
     expect(revokeObjectURL).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1000);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:ics');
+  });
+});
+
+describe('fileSafeName', () => {
+  it('keeps letters of any script and collapses everything else', () => {
+    expect(fileSafeName('Team sync')).toBe('Team_sync');
+    expect(fileSafeName('Zebranie zarządu')).toBe('Zebranie_zarządu');
+    expect(fileSafeName('会議')).toBe('会議');
+    expect(fileSafeName('Q3: plan / review!')).toBe('Q3_plan_review');
+    expect(fileSafeName('???')).toBe('meeting');
   });
 });

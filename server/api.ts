@@ -347,6 +347,26 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       fn(req, res).catch(next);
     };
 
+  /**
+   * An organizer-only change to one poll: 403 without the organizer code, 404
+   * when the poll does not exist, otherwise the changed poll as the organizer
+   * sees it. `change` edits the poll in place and throws a RequestError to
+   * refuse; it may run again after a storage conflict.
+   */
+  const organizerUpdate = async (req: express.Request, res: express.Response, change: (poll: Poll) => void) => {
+    const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
+    const poll = await pollStore.update(req.params.id, (found) => {
+      if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+      change(found);
+      return found;
+    });
+    if (!poll) {
+      res.status(404).json({ error: "Poll not found" });
+      return;
+    }
+    res.json(pollForClient(req, poll, true));
+  };
+
   // ─── Routes: read ───
 
   // Health check
@@ -556,10 +576,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       }
       const newDates = parsedDates.value;
 
-      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
-
-      const poll = await pollStore.update(req.params.id, (found) => {
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+      await organizerUpdate(req, res, (found) => {
         if (found.finalizedSlot) throw new RequestError(409, "Re-open voting before adding dates.");
         const parsed = parseProposedSlots(body.proposedSlots, newDates, found.slotInterval);
         if (!parsed.ok) throw new RequestError(400, parsed.error);
@@ -568,7 +585,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         // Already applied, e.g. a CAS replay of this very request after its
         // write committed: every date is there with exactly these times.
         if (newDates.every((d) => found.dates.includes(d) && generateDaySlots(found, d).join() === added[d].join())) {
-          return found;
+          return;
         }
         const duplicate = newDates.find((d) => found.dates.includes(d));
         if (duplicate) throw new RequestError(400, `${duplicate} is already one of the poll dates.`);
@@ -591,14 +608,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         found.dates = [...found.dates, ...newDates].sort();
         const unfit = findDateWithoutMeetingFit(found, newDates);
         if (unfit) throw new RequestError(400, `${unfit} has no ${found.durationMinutes}-minute run of proposed times.`);
-        return found;
       });
-
-      if (!poll) {
-        res.status(404).json({ error: "Poll not found" });
-        return;
-      }
-      res.json(pollForClient(req, poll, true));
     })
   );
 
@@ -752,23 +762,13 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
   app.delete(
     "/api/polls/:id/respond/:participantId",
     wrap(async (req, res) => {
-      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
-
       // Removing a response stays possible while voting is locked.
-      const poll = await pollStore.update(req.params.id, (found) => {
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+      await organizerUpdate(req, res, (found) => {
         const remaining = found.participants.filter((p) => p.id !== req.params.participantId);
         // Nothing removed means the id was never here: 404 without a write.
         if (remaining.length === found.participants.length) throw new RequestError(404, "Participant not found");
         found.participants = remaining;
-        return found;
       });
-
-      if (!poll) {
-        res.status(404).json({ error: "Poll not found" });
-        return;
-      }
-      res.json(pollForClient(req, poll, true));
     })
   );
 
@@ -781,10 +781,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
 
       // Validation that needs the poll runs inside the mutation, so there is
       // exactly one lookup and one 404 path.
-      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
-
-      const poll = await pollStore.update(req.params.id, (found) => {
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+      await organizerUpdate(req, res, (found) => {
         const reject = (error: string): never => {
           throw new RequestError(400, error);
         };
@@ -820,7 +817,7 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         if (found.finalizedSlot) {
           // Already applied, e.g. a CAS replay after this request's write committed.
           const locked = found.finalizedSlot;
-          if (locked.date === date && locked.startTime === startTime && locked.endTime === endTime) return found;
+          if (locked.date === date && locked.startTime === startTime && locked.endTime === endTime) return;
           throw new RequestError(409, "Re-open voting before choosing another meeting time.");
         }
 
@@ -831,32 +828,16 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
           confirmedBy: optionalText(confirmedBy) || found.creatorName || "Organizer",
           confirmedAt: new Date().toISOString(),
         };
-        return found;
       });
-
-      if (!poll) {
-        res.status(404).json({ error: "Poll not found" });
-        return;
-      }
-      res.json(pollForClient(req, poll, true));
     })
   );
 
   app.post(
     "/api/polls/:id/reset",
     wrap(async (req, res) => {
-      const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
-      const poll = await pollStore.update(req.params.id, (found) => {
-        if (!codeMatches(organizerCode, found.organizerCodeHash)) throw new RequestError(403, ORGANIZER_ONLY);
+      await organizerUpdate(req, res, (found) => {
         found.finalizedSlot = null;
-        return found;
       });
-
-      if (!poll) {
-        res.status(404).json({ error: "Poll not found" });
-        return;
-      }
-      res.json(pollForClient(req, poll, true));
     })
   );
 

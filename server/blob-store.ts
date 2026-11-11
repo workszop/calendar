@@ -47,6 +47,16 @@ export interface BlobStoreOptions {
   maxBackoffMs?: number;
   /** Polls read at once by getMany and moved at once by the legacy import. */
   concurrency?: number;
+  /**
+   * Remembers that the legacy array is gone. A caller that builds a store per
+   * request passes one object for all of them, so a missing poll costs one
+   * read instead of three once the array has been seen missing.
+   */
+  legacyState?: LegacyState;
+}
+
+export interface LegacyState {
+  gone: boolean;
 }
 
 // ─── Keys ───
@@ -120,14 +130,14 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
   type LegacySnapshot = { entries: unknown[]; etag: string };
 
   /** Set once the array was seen missing: it never comes back, so reads stop asking. */
-  let legacyGone = false;
+  const legacyState = options.legacyState ?? { gone: false };
 
   /** Fresh read of the legacy array. A value that is not an array holds no usable polls. */
   async function readLegacy(): Promise<LegacySnapshot | null> {
-    if (legacyGone) return null;
+    if (legacyState.gone) return null;
     const result = await client.getWithMetadata(LEGACY_KEY, READ_OPTIONS);
     if (result === null) {
-      legacyGone = true;
+      legacyState.gone = true;
       return null;
     }
     if (!Array.isArray(result.data)) {
@@ -274,10 +284,12 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
 
     const report: LegacyImportResult = { imported: 0, dropped: 0, skipped: 0, remaining: 0 };
     const written: string[] = [];
-    const queue = [...legacy.data];
+    const queue: unknown[] = legacy.data;
+    let next = 0;
     const worker = async () => {
-      while (queue.length && !shouldStop()) {
-        const raw = queue.shift();
+      while (next < queue.length && !shouldStop()) {
+        const raw = queue[next];
+        next += 1;
         let poll: Poll;
         try {
           poll = decodePoll(raw);
@@ -297,7 +309,7 @@ export function createBlobPollStore(client: BlobClient, options: BlobStoreOption
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
-    report.remaining = queue.length;
+    report.remaining = queue.length - next;
 
     // A poll deleted while this import ran is gone from the array by now; do
     // not bring it back. Without a readable array there is nothing to compare.

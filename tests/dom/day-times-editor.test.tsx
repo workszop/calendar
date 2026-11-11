@@ -119,9 +119,9 @@ describe('DayTimesEditor', () => {
     const origin = cell(DATES[0], '10:00');
     const destination = cell(DATES[1], '11:00');
     fireEvent.pointerDown(origin, { pointerId: 4, pointerType: 'mouse', button: 0 });
-    const out = new MouseEvent('pointerout', { bubbles: true, relatedTarget: destination });
-    Object.defineProperty(out, 'pointerType', { value: 'mouse' });
-    fireEvent(origin, out);
+    const over = new MouseEvent('pointerover', { bubbles: true });
+    Object.defineProperty(over, 'pointerType', { value: 'mouse' });
+    fireEvent(destination, over);
     fireEvent.pointerCancel(window, { pointerId: 4, pointerType: 'mouse', button: 0 });
 
     expect(cell(DATES[0], '10:00').dataset.selected).toBe('true');

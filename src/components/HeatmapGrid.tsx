@@ -3,7 +3,8 @@ import { BookOpen, CalendarCheck, CalendarDays, Check, Filter, HelpCircle, Lock,
 import type { Poll, SlotAnalysis } from '../types';
 import { formatTimeSlot } from '../utils/calendar';
 import { getMeetingWindow, slotKey, summarizeWindowAttendance } from '../utils/consensus';
-import { analyzeGridBlock, getBlockStatus, type GridInterval } from '../utils/grid';
+import { SLOT_STATUS_CELL_CLASS } from '../utils/slotStyles';
+import { analyzeGridBlock, blockOverlapsFinalized, getBlockStatus, type GridInterval } from '../utils/grid';
 import { usePollGrid } from '../hooks/usePollGrid';
 import { ActionDock } from './ActionDock';
 import { SlotTable } from './SlotTable';
@@ -128,29 +129,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     ? poll.participants.find((participant) => participant.id === activeParticipantFilter) ?? null
     : null;
 
-  const getParticipantCellClass = (status: string): string => {
-    switch (status) {
-      case 'preferred':
-        return 'd-calendar-cell--preferred';
-      case 'available':
-        return 'd-calendar-cell--available';
-      case 'if_needed':
-        return 'd-calendar-cell--if-needed';
-      case 'unavailable':
-        return 'd-calendar-cell--unavailable';
-      case 'mixed':
-        return 'd-calendar-cell--mixed';
-      default:
-        return 'd-calendar-cell--unanswered';
-    }
-  };
-
   const getHeatBgColor = (analysis: SlotAnalysis): string => {
     // A participant filter shows their one answer rather than inventing a group
     // count from the filtered view.
     if (filteredParticipant) {
       const block = blocks.get(analysis.slotKey);
-      return getParticipantCellClass(block ? getBlockStatus(filteredParticipant.availability, block) : 'none');
+      return SLOT_STATUS_CELL_CLASS[block ? getBlockStatus(filteredParticipant.availability, block) : 'none'];
     }
 
     const rate = totalParticipants > 0 ? analysis.availableCount / totalParticipants : 0;
@@ -165,12 +149,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   const isSlotFinalized = (key: string) => {
     const block = blocks.get(key);
-    if (!poll.finalizedSlot || !block) return false;
-    return (
-      poll.finalizedSlot.date === block.date &&
-      block.startTime < poll.finalizedSlot.endTime &&
-      block.endTime > poll.finalizedSlot.startTime
-    );
+    return !!block && blockOverlapsFinalized(block, poll.finalizedSlot);
   };
 
   // A selected slot stays stable while the pointer explores other cells. Hover
@@ -428,7 +407,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 isProposed={isProposed}
                 dateHeadings={dateHeadings}
                 renderCell={renderCell}
-                cellHeightClass="d-calendar-cell-placeholder"
                 tableProps={{ 'aria-label': 'Group availability grid' }}
               />
             </div>

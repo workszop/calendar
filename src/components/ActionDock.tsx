@@ -19,10 +19,23 @@ export function ActionDock({ children, label, className = '' }: ActionDockProps)
     const root = document.documentElement;
     const previousSpace = root.style.getPropertyValue('--action-dock-space');
     const viewport = window.visualViewport;
+    let reserved = false;
+    const restore = () => {
+      if (previousSpace) root.style.setProperty('--action-dock-space', previousSpace);
+      else root.style.removeProperty('--action-dock-space');
+    };
     const measure = () => {
+      // A dock inside a hidden panel takes no room: it gives back the space it
+      // reserved and leaves the value alone for the dock that is on screen.
+      if (dock.closest('[hidden]')) {
+        if (reserved) restore();
+        reserved = false;
+        return;
+      }
       const height = Math.ceil(dock.getBoundingClientRect().height) + 16;
       setSpace(height);
       root.style.setProperty('--action-dock-space', `${height}px`);
+      reserved = true;
       setBottom(viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0);
     };
     measure();
@@ -36,8 +49,7 @@ export function ActionDock({ children, label, className = '' }: ActionDockProps)
       window.removeEventListener('resize', measure);
       viewport?.removeEventListener('resize', measure);
       viewport?.removeEventListener('scroll', measure);
-      if (previousSpace) root.style.setProperty('--action-dock-space', previousSpace);
-      else root.style.removeProperty('--action-dock-space');
+      if (reserved) restore();
     };
   }, []);
 

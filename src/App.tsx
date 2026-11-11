@@ -40,6 +40,7 @@ import {
 import type { GridInterval } from './utils/grid';
 import { TOAST_MS } from './utils/constants';
 import { POLL_ID_RE } from './utils/limits';
+import { pollShareUrl } from './utils/links';
 import { decodePoll } from './utils/pollCodec';
 import { toPollSummary } from './utils/pollSummary';
 
@@ -237,7 +238,6 @@ export default function App() {
     name: string;
   } | null>(null);
   const [pendingPollDelete, setPendingPollDelete] = useState<PollSummary | null>(null);
-  const [painterKey, setPainterKey] = useState(0);
   const [activeParticipantFilter, setActiveParticipantFilter] = useState<string | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
@@ -319,6 +319,9 @@ export default function App() {
     return () => {
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
       navigationAbortRef.current?.abort();
+      // The aborted load must start again if this component is mounted again,
+      // as React StrictMode does in development.
+      didInit.current = false;
     };
   }, []);
 
@@ -337,6 +340,19 @@ export default function App() {
     setIsExtendModalOpen(false);
     return { requestId, controller };
   }, []);
+
+  // Leaves whatever poll was open and shows a screen that has none.
+  const showPlainScreen = useCallback((next: 'home' | 'create') => {
+    beginNavigation(null);
+    setActivePoll(null);
+    setCreatedPoll(null);
+    setError(null);
+    setActiveTab('overview');
+    setActiveParticipantFilter(null);
+    setShareReadyCopied(false);
+    setScreen(next);
+    setLoading(false);
+  }, [beginNavigation]);
 
   const commitActivePoll = useCallback((nextPoll: Poll) => {
     activePollIdRef.current = nextPoll.id;
@@ -466,7 +482,6 @@ export default function App() {
         if (!data) throw new Error('Poll not found');
         if (requestId !== navigationRequestRef.current) return;
         commitActivePoll(data);
-        setPainterKey((key) => key + 1);
         syncRoute({ kind: 'poll', id: pollId }, historyMode);
         if (linkUnchecked) setLinkCheck({ pollId, message: linkUnchecked });
         // Show the poll now; organizer tools appear once the check answers.
@@ -519,13 +534,7 @@ export default function App() {
         return;
       }
       if (params.get('create') === '1') {
-        beginNavigation(null);
-        setActivePoll(null);
-        setCreatedPoll(null);
-        setError(null);
-        setActiveTab('overview');
-        setScreen('create');
-        setLoading(false);
+        showPlainScreen('create');
         createRouteRef.current = `${window.location.pathname}${window.location.search}`;
         return;
       }
@@ -538,16 +547,9 @@ export default function App() {
         return;
       }
       if (createdId) syncRoute({ kind: 'home' }, 'replace');
-      beginNavigation(null);
-      setActivePoll(null);
-      setCreatedPoll(null);
-      setError(null);
-      setActiveTab('overview');
-      setActiveParticipantFilter(null);
-      setScreen('home');
-      setLoading(false);
+      showPlainScreen('home');
     },
-    [beginNavigation, createdPoll, fetchPoll, syncRoute]
+    [beginNavigation, createdPoll, fetchPoll, showPlainScreen, syncRoute]
   );
 
   useEffect(() => {
@@ -578,18 +580,11 @@ export default function App() {
         showToast('Finish creating the poll before leaving this page');
         return;
       }
-      beginNavigation(null);
-      setActiveTab('overview');
-      setActivePoll(null);
-      setCreatedPoll(null);
-      setError(null);
-      setActiveParticipantFilter(null);
-      setScreen('home');
-      setLoading(false);
+      showPlainScreen('home');
       syncRoute({ kind: 'home' }, historyMode);
       await fetchPollsList();
     },
-    [beginNavigation, fetchPollsList, showToast, syncRoute]
+    [fetchPollsList, showPlainScreen, showToast, syncRoute]
   );
 
   // After a 403 the unlock form replaces the control that had focus.
@@ -701,22 +696,44 @@ export default function App() {
     setActiveTab('overview');
   };
 
+  /**
+   * Sends one organizer change and shows the poll the server answers with.
+   * Rejects with the failure; resolves false when the user has since moved to
+   * another screen, so the caller skips its own follow-up.
+   */
+  const organizerChange = async (
+    pollId: string,
+    suffix: string,
+    method: 'POST' | 'DELETE',
+    fallback: string,
+    body?: unknown
+  ): Promise<boolean> => {
+    const navigationRequestId = navigationRequestRef.current;
+    const res = await fetchWithRetry(pollPath(pollId, suffix), {
+      method,
+      headers: { ...(body === undefined ? {} : JSON_HEADERS), ...organizerHeaders(pollId) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) throw await organizerFailure(res, pollId, fallback);
+    const updated = await readPollBody<Poll>(res);
+    void fetchPollsList();
+    if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return false;
+    commitActivePoll(updated);
+    return true;
+  };
+
   const confirmDeleteParticipant = async () => {
     const target = pendingDelete;
     setPendingDelete(null);
     if (!activePoll || !target || target.pollId !== activePoll.id) return;
-    const pollId = activePoll.id;
-    const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetchWithRetry(pollPath(pollId, `/respond/${encodeURIComponent(target.id)}`), {
-        method: 'DELETE',
-        headers: organizerHeaders(pollId),
-      });
-      if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to remove participant');
-      const updated = await readPollBody<Poll>(res);
-      void fetchPollsList();
-      if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
-      commitActivePoll(updated);
+      const shown = await organizerChange(
+        activePoll.id,
+        `/respond/${encodeURIComponent(target.id)}`,
+        'DELETE',
+        'Failed to remove participant'
+      );
+      if (!shown) return;
       if (activeParticipantFilter === target.id) setActiveParticipantFilter(null);
       showToast(`Removed ${target.name}'s response`);
     } catch (err) {
@@ -745,20 +762,9 @@ export default function App() {
 
   const handleAddDates = async (dates: string[], proposedSlots: Record<string, string[]>) => {
     if (!activePoll) return;
-    const pollId = activePoll.id;
-    const navigationRequestId = navigationRequestRef.current;
     // The Add dates dialog shows failures inline, so nothing is toasted here.
-    const res = await fetchWithRetry(pollPath(pollId, '/dates'), {
-      method: 'POST',
-      headers: { ...JSON_HEADERS, ...organizerHeaders(pollId) },
-      body: JSON.stringify({ dates, proposedSlots }),
-    });
-    if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to add dates');
-    const updated = await readPollBody<Poll>(res);
-    void fetchPollsList();
-    if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
-    commitActivePoll(updated);
-    showToast(dates.length === 1 ? 'Added 1 date' : `Added ${dates.length} dates`);
+    const shown = await organizerChange(activePoll.id, '/dates', 'POST', 'Failed to add dates', { dates, proposedSlots });
+    if (shown) showToast(dates.length === 1 ? 'Added 1 date' : `Added ${dates.length} dates`);
   };
 
   const handleFinalizeSlot = async (date: string, startTime: string, endTime: string) => {
@@ -767,24 +773,14 @@ export default function App() {
     if (finalizingRef.current) return;
     finalizingRef.current = true;
     setIsFinalizing(true);
-    const pollId = activePoll.id;
-    const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetchWithRetry(pollPath(pollId, '/finalize'), {
-        method: 'POST',
-        headers: { ...JSON_HEADERS, ...organizerHeaders(pollId) },
-        body: JSON.stringify({
-          date,
-          startTime,
-          endTime,
-          confirmedBy: getStoredUser().name || activePoll.creatorName || 'Organizer',
-        }),
+      const shown = await organizerChange(activePoll.id, '/finalize', 'POST', 'Failed to lock meeting time', {
+        date,
+        startTime,
+        endTime,
+        confirmedBy: getStoredUser().name || activePoll.creatorName || 'Organizer',
       });
-      if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to lock meeting time');
-      const updated = await readPollBody<Poll>(res);
-      void fetchPollsList();
-      if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
-      commitActivePoll(updated);
+      if (!shown) return;
       showToast('Meeting time locked');
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: EDULAB_CONFETTI });
     } catch (err) {
@@ -797,16 +793,10 @@ export default function App() {
 
   const handleResetFinalized = async (): Promise<void> => {
     if (!activePoll) return;
-    const pollId = activePoll.id;
-    const navigationRequestId = navigationRequestRef.current;
     try {
-      const res = await fetchWithRetry(pollPath(pollId, '/reset'), { method: 'POST', headers: organizerHeaders(pollId) });
-      if (!res.ok) throw await organizerFailure(res, pollId, 'Failed to reset finalized time');
-      const updated = await readPollBody<Poll>(res);
-      void fetchPollsList();
-      if (navigationRequestId !== navigationRequestRef.current || activePollIdRef.current !== pollId) return;
-      commitActivePoll(updated);
-      showToast('Voting re-opened');
+      if (await organizerChange(activePoll.id, '/reset', 'POST', 'Failed to reset finalized time')) {
+        showToast('Voting re-opened');
+      }
     } catch (err) {
       if (!isPollGoneError(err)) showToast(errorMessage(err, 'Error resetting time'));
     }
@@ -820,7 +810,7 @@ export default function App() {
       // The create page shows failures inline, so nothing is toasted here.
       const res = await fetchWithRetry('/api/polls', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify(pollData),
       });
       if (!res.ok) throw await readError(res, 'Failed to create poll');
@@ -853,18 +843,10 @@ export default function App() {
       showToast('Finish creating the poll before leaving this page');
       return;
     }
-    beginNavigation(null);
-    setActivePoll(null);
-    setCreatedPoll(null);
-    setError(null);
-    setActiveTab('overview');
-    setActiveParticipantFilter(null);
-    setShareReadyCopied(false);
-    setScreen('create');
-    setLoading(false);
+    showPlainScreen('create');
     syncRoute({ kind: 'create' }, 'push');
     createRouteRef.current = `${window.location.pathname}${window.location.search}`;
-  }, [beginNavigation, showToast, syncRoute]);
+  }, [showPlainScreen, showToast, syncRoute]);
 
   const handleCreateBusyChange = useCallback((busy: boolean) => {
     isCreatingRef.current = busy;
@@ -881,9 +863,8 @@ export default function App() {
 
   const handleCopyShareReadyLink = useCallback(async () => {
     if (!createdPoll) return;
-    const shareUrl = `${window.location.origin}${window.location.pathname}?poll=${createdPoll.id}`;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(pollShareUrl(createdPoll.id));
       setShareReadyCopied(true);
       showToast('Poll link copied');
     } catch {
@@ -959,9 +940,7 @@ export default function App() {
   const createdOrganizerCode = createdPoll ? getOrganizerCode(createdPoll.id) : undefined;
   const ownResponse = poll ? getStoredResponse(poll.id) : undefined;
   const canFinalize = isOrganizer && poll !== null && !poll.finalizedSlot && poll.participants.length > 0;
-  const shareReadyUrl = createdPoll
-    ? `${window.location.origin}${window.location.pathname}?poll=${createdPoll.id}`
-    : '';
+  const shareReadyUrl = createdPoll ? pollShareUrl(createdPoll.id) : '';
 
   const workspace = poll && (
     <section className="d-shell-workspace" data-screen="workspace" data-selection={activeTab} data-organizer-state={organizerState}>
@@ -1064,7 +1043,7 @@ export default function App() {
         </details>
       </div>
 
-      {activeTab === 'overview' ? (
+      {activeTab === 'overview' && (
         <div role="tabpanel" id="tabpanel-overview" aria-labelledby="tab-overview-btn">
           <HeatmapGrid
             poll={poll}
@@ -1085,18 +1064,18 @@ export default function App() {
             </div>
           </details>
         </div>
-      ) : (
-        <div role="tabpanel" id="tabpanel-answer" aria-labelledby="tab-answer-btn">
-          <AvailabilityPainter
-            key={painterKey}
-            poll={poll}
-            gridInterval={gridInterval}
-            onSaveAvailability={handleSaveAvailability}
-            onCancel={() => setActiveTab('overview')}
-            ownParticipantId={ownResponse?.participantId}
-          />
-        </div>
       )}
+      {/* Stays mounted while hidden, so an unsaved answer survives a look at the overview. */}
+      <div role="tabpanel" id="tabpanel-answer" aria-labelledby="tab-answer-btn" hidden={activeTab !== 'answer'}>
+        <AvailabilityPainter
+          key={poll.id}
+          poll={poll}
+          gridInterval={gridInterval}
+          onSaveAvailability={handleSaveAvailability}
+          onCancel={() => setActiveTab('overview')}
+          ownParticipantId={ownResponse?.participantId}
+        />
+      </div>
 
       <details ref={manageDisclosureRef} className="d-shell-disclosure d-shell-management">
         <summary>Manage poll</summary>
@@ -1283,7 +1262,6 @@ export default function App() {
             : ''
         }
         confirmLabel="Delete poll"
-        danger
         onConfirm={() => void confirmDeletePoll()}
         onCancel={() => setPendingPollDelete(null)}
       />
@@ -1293,7 +1271,6 @@ export default function App() {
         title="Remove response?"
         message={pendingDelete ? `${pendingDelete.name}'s availability will be deleted from this poll. This cannot be undone.` : ''}
         confirmLabel="Remove"
-        danger
         onConfirm={() => void confirmDeleteParticipant()}
         onCancel={() => setPendingDelete(null)}
       />

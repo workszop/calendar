@@ -1,14 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useRef, useState } from 'react';
 import { CalendarDays, Check, HelpCircle, Save, Star, X } from 'lucide-react';
 import type { Poll, SlotStatus } from '../types';
 import { formatTimeSlot } from '../utils/calendar';
 import { slotKey } from '../utils/consensus';
-import { getBlockStatus, type GridInterval } from '../utils/grid';
+import { blockOverlapsFinalized, getBlockStatus, type GridInterval } from '../utils/grid';
 import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '../utils/limits';
-import { SLOT_STATUS_LABEL } from '../utils/slotStyles';
+import { SLOT_STATUS_CELL_CLASS, SLOT_STATUS_LABEL, type SlotStatusOrNone } from '../utils/slotStyles';
 import { getStoredUser, setStoredUser } from '../utils/storage';
 import { usePollGrid } from '../hooks/usePollGrid';
-import { useGridStroke } from '../hooks/useGridStroke';
+import { slotKeyOf, useGridStroke } from '../hooks/useGridStroke';
 import { ActionDock } from './ActionDock';
 import { SlotTable } from './SlotTable';
 import { TimeZoneNote } from './TimeZoneNote';
@@ -78,6 +78,68 @@ const SAVE_ERROR_TIMEOUT_MS = 8000;
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
+// ─── Cell ───
+// Every prop is a primitive and the pointer, click and key handling lives on the
+// table, so painting re-renders only the cells whose answer changed.
+
+interface PaintCellProps {
+  slotKey: string;
+  status: SlotStatusOrNone;
+  /** The block overlaps the confirmed meeting time. */
+  isFinalized: boolean;
+  disabled: boolean;
+  label: string;
+  coveredSlots: string;
+}
+
+const PaintCell = memo(function PaintCell({ slotKey: key, status, isFinalized, disabled, label, coveredSlots }: PaintCellProps) {
+  return (
+    <button
+      type="button"
+      id={`paint-slot-${key}`}
+      data-slot-key={key}
+      data-status={status}
+      data-covered-slots={coveredSlots}
+      data-finalized={isFinalized ? 'true' : 'false'}
+      disabled={disabled}
+      // A cell consumes a touch gesture for painting, as in DayTimesEditor; the
+      // Time column and the page around the grid still scroll.
+      style={{ touchAction: 'none' }}
+      aria-label={label}
+      title={label}
+      aria-pressed={status !== 'none'}
+      className={`d-calendar-cell ${SLOT_STATUS_CELL_CLASS[status]} ${isFinalized ? 'd-answer-slot--locked' : ''}`}
+    >
+      <span className="d-calendar-cell-label">
+        {isFinalized ? (
+          'Confirmed'
+        ) : status === 'preferred' ? (
+          <>
+            <Star className="d-calendar-cell-icon" fill="currentColor" aria-hidden="true" />
+            Yes
+          </>
+        ) : status === 'available' ? (
+          <>
+            <Check className="d-calendar-cell-icon" aria-hidden="true" />
+            Yes
+          </>
+        ) : status === 'unavailable' ? (
+          <>
+            <X className="d-calendar-cell-icon" aria-hidden="true" />
+            Busy
+          </>
+        ) : status === 'if_needed' ? (
+          'Maybe'
+        ) : status === 'mixed' ? (
+          'Mixed'
+        ) : (
+          'Proposed'
+        )}
+      </span>
+    </button>
+  );
+});
+
 // ─── Painter ───
 
 export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
@@ -92,8 +154,12 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const [userEmail, setUserEmail] = useState(() => getStoredUser().email);
   const [activeBrush, setActiveBrush] = useState<SlotStatus>('available');
   const [availability, setAvailability] = useState<Record<string, SlotStatus>>({});
-  const [isSaving, setIsSaving] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('idle');
+  const isSaving = saveState === 'saving';
+  // Once a time is confirmed the server refuses every answer, so nothing here
+  // may look editable.
+  const isLocked = poll.finalizedSlot !== null && poll.finalizedSlot !== undefined;
+  const disabled = isSaving || isLocked;
   const [nameError, setNameError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // Set after a 403 on an update: offers saving the painted grid as a new response.
@@ -168,27 +234,9 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     }, SAVE_ERROR_TIMEOUT_MS);
   };
 
-  const isBlockFinalized = (key: string) => {
-    const block = blocks.get(key);
-    const finalized = poll.finalizedSlot;
-    if (!block || !finalized || finalized.date !== block.date) return false;
-    return block.startTime < finalized.endTime && block.endTime > finalized.startTime;
-  };
-
-  const isAtomicSlotFinalized = (key: string) => {
-    const separator = key.indexOf('T');
-    if (separator < 0) return false;
-    const date = key.slice(0, separator);
-    const time = key.slice(separator + 1);
-    for (const [blockKey, block] of blocks) {
-      if (block.date === date && block.slotTimes.includes(time) && isBlockFinalized(blockKey)) return true;
-    }
-    return false;
-  };
-
   const clearBlock = (key: string) => {
     const block = blocks.get(key);
-    if (!block || isBlockFinalized(key)) return;
+    if (!block) return;
     markDraftChanged();
     setAvailability((previous) => {
       let changed = false;
@@ -209,8 +257,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     const next = { ...base };
     keys.forEach((key) => {
       const block = blocks.get(key);
-      if (!block || isBlockFinalized(key)) return;
-      block.slotTimes.forEach((time) => {
+      block?.slotTimes.forEach((time) => {
         next[slotKey(block.date, time)] = status;
       });
     });
@@ -221,8 +268,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     markDraftChanged();
     setAvailability((previous) => withBlocks(previous, keys, status));
   };
-
-  const setBlock = (key: string, status: SlotStatus) => setBlocks([key], status);
 
   // ─── Stroke ───
   // A single click on a cell that already holds the brush clears it; a drag only
@@ -235,11 +280,11 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
   const stroke = useGridStroke({
     dates: poll.dates,
     times: timeSlots,
-    hasCell: (key) => blocks.has(key) && !isBlockFinalized(key),
-    disabled: isSaving,
+    hasCell: (key) => blocks.has(key),
+    disabled,
     onBegin: (key) => {
       const block = blocks.get(key);
-      if (!block || isBlockFinalized(key)) return;
+      if (!block) return;
       markDraftChanged();
       strokeBrushRef.current = activeBrush;
       strokeBaseRef.current = availability;
@@ -258,19 +303,21 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     resetKey: `${effectiveGridInterval}:${poll.id}`,
   });
 
-  const handleCellKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, key: string) => {
-    if (isSaving || isBlockFinalized(key)) return;
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    const block = blocks.get(key);
-    if (!block) return;
+  // A pointer press is handled by the stroke. A click with no pointer behind it
+  // (Enter or Space on the focused cell, a screen reader's or voice control's
+  // activation) reports detail 0 and toggles the cell here.
+  const handleTableClick = (event: React.MouseEvent<HTMLTableElement>) => {
+    if (disabled || event.detail !== 0) return;
+    const key = slotKeyOf(event.target);
+    const block = key ? blocks.get(key) : undefined;
+    if (!key || !block) return;
     if (getBlockStatus(availability, block) === activeBrush) clearBlock(key);
-    else setBlock(key, activeBrush);
+    else setBlocks([key], activeBrush);
   };
 
   // ─── Brush radiogroup ───
   const handleBrushKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-    if (isSaving) return;
+    if (disabled) return;
     let next: number;
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % BRUSHES.length;
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + BRUSHES.length) % BRUSHES.length;
@@ -284,51 +331,37 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
 
   // Fill entire column / day with current brush.
   const handleFillDay = (dateStr: string) => {
-    if (isSaving) return;
+    if (disabled) return;
     markDraftChanged();
     setAvailability((previous) => {
       const next = { ...previous };
       daySlots.get(dateStr)?.forEach((time) => {
-        const key = slotKey(dateStr, time);
-        if (!isAtomicSlotFinalized(key)) next[key] = activeBrush;
+        next[slotKey(dateStr, time)] = activeBrush;
       });
       return next;
     });
   };
 
   const handleSelectAllAvailable = () => {
-    if (isSaving) return;
+    if (disabled) return;
     markDraftChanged();
-    setAvailability((previous) => {
-      const next: Record<string, SlotStatus> = {};
-      Object.entries(previous).forEach(([key, status]) => {
-        if (isAtomicSlotFinalized(key)) next[key] = status;
+    const next: Record<string, SlotStatus> = {};
+    poll.dates.forEach((date) => {
+      daySlots.get(date)?.forEach((time) => {
+        next[slotKey(date, time)] = 'available';
       });
-      poll.dates.forEach((date) => {
-        daySlots.get(date)?.forEach((time) => {
-          const key = slotKey(date, time);
-          if (!isAtomicSlotFinalized(key)) next[key] = 'available';
-        });
-      });
-      return next;
     });
+    setAvailability(next);
   };
 
   const handleClearAll = () => {
-    if (isSaving) return;
+    if (disabled) return;
     markDraftChanged();
-    setAvailability((previous) => {
-      if (!poll.finalizedSlot) return {};
-      const next: Record<string, SlotStatus> = {};
-      Object.entries(previous).forEach(([key, status]) => {
-        if (isAtomicSlotFinalized(key)) next[key] = status;
-      });
-      return next;
-    });
+    setAvailability({});
   };
 
   const save = async (asNew: boolean) => {
-    if (isSaving) return;
+    if (disabled) return;
     if (saveErrorTimerRef.current) clearTimeout(saveErrorTimerRef.current);
     setSaveError(null);
     setSaveState('idle');
@@ -339,7 +372,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
       return;
     }
     setNameError(null);
-    setIsSaving(true);
     setSaveState('saving');
     const email = userEmail.trim();
     // An empty field clears the remembered email too.
@@ -369,8 +401,6 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
       } else {
         showSaveError('Could not save your availability. Please try again.');
       }
-    } finally {
-      setIsSaving(false);
     }
   };
 
@@ -392,7 +422,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
         role="radio"
         aria-checked={isActive}
         tabIndex={isActive ? 0 : -1}
-        disabled={isSaving}
+        disabled={disabled}
         onClick={() => {
           setActiveBrush(status);
           markDraftChanged();
@@ -411,7 +441,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     return (
       <button
         type="button"
-        disabled={isSaving}
+        disabled={disabled}
         onClick={() => handleFillDay(dateStr)}
         aria-label={`Answer all of ${heading?.weekday} ${heading?.dayMonth} with ${activeBrushDef.label}`}
         className="d-answer-day-fill"
@@ -428,73 +458,24 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     const block = blocks.get(key);
     if (!block) return null;
     const status = getBlockStatus(availability, block);
-    const isFinalized = isBlockFinalized(key);
+    const isFinalized = blockOverlapsFinalized(block, poll.finalizedSlot);
     const heading = dateHeadings.get(dateStr);
-    const answer = SLOT_STATUS_LABEL[status];
     const displayRange = `${formatTimeSlot(block.startTime)} – ${formatTimeSlot(block.endTime)}`;
-    const cellLabel = `${heading?.weekday} ${heading?.dayMonth} ${displayRange}: ${
-      isFinalized ? 'Confirmed' : answer
-    }`;
-    const styleClass =
-      status === 'preferred'
-        ? 'd-calendar-cell--preferred'
-        : status === 'available'
-          ? 'd-calendar-cell--available'
-          : status === 'if_needed'
-            ? 'd-calendar-cell--if-needed'
-            : status === 'unavailable'
-              ? 'd-calendar-cell--unavailable'
-              : status === 'mixed'
-                ? 'd-calendar-cell--mixed'
-                : 'd-calendar-cell--unanswered';
-
     return (
-      <button
-        type="button"
-        id={`paint-slot-${key}`}
-        data-slot-key={key}
-        data-status={status}
-        data-covered-slots={block.slotTimes.join(',')}
-        data-finalized={isFinalized ? 'true' : 'false'}
-        disabled={isSaving || isFinalized}
-        // A cell consumes a touch gesture for painting, as in DayTimesEditor; the
-        // Time column and the page around the grid still scroll.
-        style={{ touchAction: 'none' }}
-        aria-label={cellLabel}
-        title={cellLabel}
-        aria-pressed={status !== 'none'}
-        {...stroke.cellProps(key)}
-        onKeyDown={(event) => handleCellKeyDown(event, key)}
-        className={`d-calendar-cell ${styleClass} ${isFinalized ? 'd-answer-slot--locked' : ''}`}
-      >
-        {isFinalized && <span className="d-calendar-cell-label">Confirmed</span>}
-        {!isFinalized && status === 'preferred' && (
-          <span className="d-calendar-cell-label">
-            <Star className="d-calendar-cell-icon" fill="currentColor" aria-hidden="true" />
-            Yes
-          </span>
-        )}
-        {!isFinalized && status === 'available' && (
-          <span className="d-calendar-cell-label">
-            <Check className="d-calendar-cell-icon" aria-hidden="true" />
-            Yes
-          </span>
-        )}
-        {!isFinalized && status === 'if_needed' && <span className="d-calendar-cell-label">Maybe</span>}
-        {!isFinalized && status === 'unavailable' && (
-          <span className="d-calendar-cell-label">
-            <X className="d-calendar-cell-icon" aria-hidden="true" />
-            Busy
-          </span>
-        )}
-        {!isFinalized && status === 'mixed' && <span className="d-calendar-cell-label">Mixed</span>}
-        {!isFinalized && status === 'none' && <span className="d-calendar-cell-label">Proposed</span>}
-      </button>
+      <PaintCell
+        slotKey={key}
+        status={status}
+        isFinalized={isFinalized}
+        disabled={disabled}
+        label={`${heading?.weekday} ${heading?.dayMonth} ${displayRange}: ${isFinalized ? 'Confirmed' : SLOT_STATUS_LABEL[status]}`}
+        coveredSlots={block.slotTimes.join(',')}
+      />
     );
   };
 
-  const saveStatus =
-    saveState === 'saving'
+  const saveStatus = isLocked
+    ? 'Voting is closed: a meeting time has been confirmed.'
+    : saveState === 'saving'
       ? 'Saving your answer...'
       : saveState === 'saved'
         ? 'Saved. You can update your answer any time.'
@@ -548,8 +529,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
             dateHeadings={dateHeadings}
             renderHeader={renderDayHeader}
             renderCell={renderSlotCell}
-            cellHeightClass="d-calendar-cell-placeholder"
-            tableProps={{ ...stroke.tableProps, 'aria-label': 'Your availability grid' }}
+            tableProps={{ ...stroke.tableProps, onClick: handleTableClick, 'aria-label': 'Your availability grid' }}
           />
         </div>
 
@@ -561,7 +541,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
             <button
               type="button"
               id="clear-selection-btn"
-              disabled={isSaving}
+              disabled={disabled}
               onClick={handleClearAll}
               className="d-answer-clear-button"
             >
@@ -600,7 +580,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
               <button
                 type="button"
                 id="fill-all-available-btn"
-                disabled={isSaving}
+                disabled={disabled}
                 onClick={handleSelectAllAvailable}
                 className="d-answer-clear-button"
               >
@@ -609,7 +589,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
               <button
                 type="button"
                 id="clear-all-btn"
-                disabled={isSaving}
+                disabled={disabled}
                 onClick={handleClearAll}
                 className="d-answer-clear-button"
               >
@@ -633,7 +613,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
             <input
               id="user-email-input"
               type="email"
-              disabled={isSaving}
+              disabled={disabled}
               value={userEmail}
               onChange={(event) => {
                 setUserEmail(event.target.value);
@@ -660,7 +640,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
                   aria-invalid={nameError ? true : undefined}
                   aria-describedby={nameError ? 'user-name-error' : undefined}
                   value={userName}
-                  disabled={isSaving}
+                  disabled={disabled}
                   onChange={(event) => {
                     setUserName(event.target.value);
                     markDraftChanged();
@@ -688,7 +668,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
                     Cancel
                   </button>
                 )}
-                <button type="submit" id="save-availability-btn" disabled={isSaving} className="d-answer-save-action">
+                <button type="submit" id="save-availability-btn" disabled={disabled} className="d-answer-save-action">
                   {isSaving ? (
                     'Saving...'
                   ) : (
@@ -713,7 +693,7 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
                 type="button"
                 id="save-as-new-response-btn"
                 data-save-as-new
-                disabled={isSaving}
+                disabled={disabled}
                 onClick={() => void save(true)}
                 className="d-answer-secondary-action"
               >

@@ -52,13 +52,13 @@ describe('analyzeWindow', () => {
     const a = analyzeWindow(poll, '2026-10-01', '10:00', ['10:00']);
     expect(a.availableCount).toBe(2);
     expect(a.preferredCount).toBe(1);
-    expect(a.attendanceRate).toBe(1);
+    expect(a.totalParticipants).toBe(2);
     expect(a.availableNames).toEqual(['Ann', 'Ben']);
   });
   it('treats missing entries as unavailable', () => {
     const a = analyzeWindow(poll, '2026-10-01', '11:30', ['11:30']);
     expect(a.availableCount).toBe(0);
-    expect(a.unavailableCount).toBe(2);
+    expect(a.unavailableNames).toEqual(['Ann', 'Ben']);
   });
 });
 

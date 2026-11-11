@@ -1,4 +1,4 @@
-import type { Poll, SlotStatus } from '../types';
+import type { FinalizedSlot, Poll, SlotStatus } from '../types';
 import { analyzeWindow, slotKey } from './consensus';
 
 export type GridInterval = 30 | 60;
@@ -20,4 +20,14 @@ export function getBlockStatus(availability: Record<string, SlotStatus>, block: 
 /** A participant counts as available only when they can attend the entire block. */
 export function analyzeGridBlock(poll: Poll, block: GridBlock) {
   return analyzeWindow(poll, block.date, block.startTime, block.slotTimes);
+}
+
+/** Whether a display block shares any time with the confirmed meeting. */
+export function blockOverlapsFinalized(block: GridBlock, finalized: FinalizedSlot | null | undefined): boolean {
+  return (
+    !!finalized &&
+    finalized.date === block.date &&
+    block.startTime < finalized.endTime &&
+    block.endTime > finalized.startTime
+  );
 }

@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Download, KeyRound, Link2 } from 'lucide-react';
 import { downloadTextFile, fileSafeName } from '../utils/download';
+import { pollShareUrl } from '../utils/links';
 
 // ─── Organizer access ───
 // The organizer code is kept in this browser automatically; these controls let
@@ -10,7 +11,7 @@ import { downloadTextFile, fileSafeName } from '../utils/download';
 export const ORGANIZER_FRAGMENT_KEY = 'organizer';
 
 export function organizerLink(pollId: string, code: string): string {
-  return `${window.location.origin}${window.location.pathname}?poll=${encodeURIComponent(pollId)}#${ORGANIZER_FRAGMENT_KEY}=${encodeURIComponent(code)}`;
+  return `${pollShareUrl(pollId)}#${ORGANIZER_FRAGMENT_KEY}=${encodeURIComponent(code)}`;
 }
 
 /** Reads an organizer code from the current URL fragment, leaving the URL alone. */

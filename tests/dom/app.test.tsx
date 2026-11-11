@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement as h } from 'react';
+import { createElement as h, StrictMode } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App, { apiRetry } from '../../src/App';
 import type { Poll, PollSummary } from '../../src/types';
@@ -126,6 +126,28 @@ describe('App navigation and home contract', () => {
     ]);
     expect(screen.queryByText('P1')).toBeNull();
     expect(screen.getByRole('tab', { name: 'My answer' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('opens a shared link under StrictMode, which mounts, unmounts and mounts again in development', async () => {
+    const poll2 = makePoll('p2', 'P2');
+    // Like the real fetch, a request whose signal is aborted rejects.
+    const answer = (init: RequestInit | undefined, body: unknown) =>
+      new Promise<Response>((resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        setTimeout(() => resolve(jsonResponse(body)), 0);
+      });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = route(input);
+      if (url === '/api/polls') return answer(init, [summary(poll2)]);
+      if (url === '/api/polls/p2/access') return answer(init, { organizer: true });
+      if (url === '/api/polls/p2') return answer(init, poll2);
+      throw new Error(`Unexpected ${url}`);
+    }));
+    window.history.replaceState({}, '', '/?poll=p2');
+
+    render(h(StrictMode, null, h(App)));
+
+    expect(await screen.findByRole('heading', { name: 'P2' })).toBeTruthy();
   });
 
   it('returns home and removes the poll query', async () => {

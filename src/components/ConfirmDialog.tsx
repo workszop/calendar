@@ -7,20 +7,16 @@ export interface ConfirmDialogProps {
   title: string;
   message: string;
   confirmLabel?: string;
-  cancelLabel?: string;
-  danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-/** Yes/no dialog built on Modal. Focus lands on cancel, the safe choice. */
+/** Confirms a destructive action. Built on Modal; focus lands on cancel, the safe choice. */
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   isOpen,
   title,
   message,
   confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  danger = false,
   onConfirm,
   onCancel,
 }) => {
@@ -37,16 +33,12 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       <p className="text-sm text-stone-600">{message}</p>
       <div className="mt-5 flex items-center justify-end gap-2">
         <button ref={cancelRef} type="button" onClick={onCancel} className="edu-btn-secondary">
-          {cancelLabel}
+          Cancel
         </button>
         <button
           type="button"
           onClick={onConfirm}
-          className={
-            danger
-              ? 'inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-red-500 hover:bg-red-600 text-white font-bold text-xs transition-colors'
-              : 'edu-btn-primary'
-          }
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-red-500 hover:bg-red-600 text-white font-bold text-xs transition-colors"
         >
           {confirmLabel}
         </button>

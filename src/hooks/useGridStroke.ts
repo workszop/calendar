@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
-import { slotKey } from '../utils/consensus';
+import { slotKey, splitSlotKey } from '../utils/consensus';
 
 // ─── Drag-to-paint over a date x time grid ───
 // Shared by the availability painter and the organizer's proposal grid. It owns
@@ -30,17 +30,27 @@ export interface GridStrokeOptions {
   resetKey?: unknown;
 }
 
+/**
+ * Handlers for the grid's <table>. Cells carry no handlers of their own: each
+ * is found through its `data-slot-key` attribute, so a cell's props stay
+ * stable from one render to the next and it can be memoised.
+ */
 export interface GridStroke {
-  cellProps: (key: string) => {
-    onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
-    onPointerEnter: (e: React.PointerEvent<HTMLElement>) => void;
+  tableProps: {
+    onPointerDown: (e: React.PointerEvent<HTMLTableElement>) => void;
+    onPointerOver: (e: React.PointerEvent<HTMLTableElement>) => void;
+    onPointerMove: (e: React.PointerEvent<HTMLTableElement>) => void;
   };
-  tableProps: { onPointerMove: (e: React.PointerEvent<HTMLTableElement>) => void };
 }
 
-function splitKey(key: string): [string, string] {
-  const index = key.indexOf('T');
-  return [key.slice(0, index), key.slice(index + 1)];
+/** The cell element under an event target or a screen point, if any. */
+function cellOf(target: EventTarget | Element | null): HTMLElement | null {
+  return target instanceof Element ? target.closest<HTMLElement>('[data-slot-key]') : null;
+}
+
+/** The slot key of the cell an event happened in, e.g. for a delegated click. */
+export function slotKeyOf(target: EventTarget | null): string | null {
+  return cellOf(target)?.getAttribute('data-slot-key') ?? null;
 }
 
 export function useGridStroke(options: GridStrokeOptions): GridStroke {
@@ -65,8 +75,8 @@ export function useGridStroke(options: GridStrokeOptions): GridStroke {
   // Every existing cell in the rectangle spanned by two cells.
   const keysBetween = (fromKey: string, toKey: string): string[] => {
     const { dates, times, hasCell } = optionsRef.current;
-    const [fromDate, fromTime] = splitKey(fromKey);
-    const [toDate, toTime] = splitKey(toKey);
+    const [fromDate, fromTime] = splitSlotKey(fromKey);
+    const [toDate, toTime] = splitSlotKey(toKey);
     const dateA = dates.indexOf(fromDate);
     const dateB = dates.indexOf(toDate);
     const timeA = times.indexOf(fromTime);
@@ -117,20 +127,22 @@ export function useGridStroke(options: GridStrokeOptions): GridStroke {
     reset();
   }, [options.resetKey]);
 
-  const cellProps = (key: string) => ({
-    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+  // Touch and pen do not fire pointerover on the elements they pass over, so
+  // for those the grid hit-tests the pointer position itself.
+  const tableProps = {
+    onPointerDown: (e: React.PointerEvent<HTMLTableElement>) => {
       if (optionsRef.current.disabled) return;
-      // A locked cell (e.g. a finalized block) can still receive pointer events
-      // while its button is disabled; it must not start a stroke.
-      if (!optionsRef.current.hasCell(key)) return;
+      const cell = cellOf(e.target);
+      const key = cell?.getAttribute('data-slot-key');
+      // A locked cell can still receive pointer events while its button is
+      // disabled; it must not start a stroke.
+      if (!cell || !key || !optionsRef.current.hasCell(key)) return;
       // Left button only; a right-click or middle-click must not start painting.
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (e.pointerType !== 'mouse' && e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
       // Touch pointers are implicitly captured by the origin element; release so
-      // the grid-level pointermove hit-testing can paint across neighbouring cells.
-      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
+      // the pointermove hit-testing can paint across neighbouring cells.
+      if (cell.hasPointerCapture?.(e.pointerId)) cell.releasePointerCapture(e.pointerId);
       originRef.current = key;
       lastRef.current = key;
       movedRef.current = false;
@@ -138,22 +150,17 @@ export function useGridStroke(options: GridStrokeOptions): GridStroke {
       optionsRef.current.onBegin(key);
       optionsRef.current.onPaint([key], true);
     },
-    onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
-      if (optionsRef.current.disabled) return;
-      if (e.pointerType === 'mouse') extendTo(key);
+    onPointerOver: (e: React.PointerEvent<HTMLTableElement>) => {
+      if (optionsRef.current.disabled || e.pointerType !== 'mouse') return;
+      const key = slotKeyOf(e.target);
+      if (key) extendTo(key);
     },
-  });
-
-  // Touch and pen do not fire pointerenter on the elements they pass over, so the
-  // grid hit-tests the pointer position itself.
-  const tableProps = {
     onPointerMove: (e: React.PointerEvent<HTMLTableElement>) => {
       if (optionsRef.current.disabled || e.pointerType === 'mouse' || !originRef.current) return;
-      const target = document.elementFromPoint(e.clientX, e.clientY);
-      const key = target?.closest('[data-slot-key]')?.getAttribute('data-slot-key');
+      const key = slotKeyOf(document.elementFromPoint(e.clientX, e.clientY));
       if (key) extendTo(key);
     },
   };
 
-  return { cellProps, tableProps };
+  return { tableProps };
 }

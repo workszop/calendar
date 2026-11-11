@@ -58,9 +58,7 @@ export interface SlotAnalysis {
   availableCount: number;
   preferredCount: number;
   ifNeededCount: number;
-  unavailableCount: number;
   totalParticipants: number;
-  attendanceRate: number; // 0 to 1
   availableNames: string[];
   preferredNames: string[];
   ifNeededNames: string[];

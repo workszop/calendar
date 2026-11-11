@@ -423,7 +423,7 @@ describe('organizer access', () => {
     window.history.replaceState({}, '', '/?poll=p1');
 
     const save = await openAnswerTab();
-    fireEvent.keyDown(document.getElementById('paint-slot-2026-10-01T09:30')!, { key: 'Enter' });
+    fireEvent.click(document.getElementById('paint-slot-2026-10-01T09:30')!);
     fireEvent.click(save);
 
     const saveAsNew = await screen.findByRole('button', { name: 'Save as a new response' });

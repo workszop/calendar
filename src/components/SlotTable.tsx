@@ -17,8 +17,6 @@ interface SlotTableProps {
   /** Replaces the plain weekday / day-month heading (the painter makes it a button). */
   renderHeader?: (date: string) => React.ReactNode;
   renderCell: (date: string, time: string) => React.ReactNode;
-  /** Tailwind height of one cell, e.g. "h-10" - also sizes the blank spacers. */
-  cellHeightClass: string;
   /** Extra props for the <table> element (the painter listens for pointermove here). */
   tableProps?: React.HTMLAttributes<HTMLTableElement>;
 }
@@ -30,7 +28,6 @@ export const SlotTable: React.FC<SlotTableProps> = ({
   dateHeadings,
   renderHeader,
   renderCell,
-  cellHeightClass,
   tableProps,
 }) => (
   <div className="overflow-x-auto">
@@ -85,7 +82,7 @@ export const SlotTable: React.FC<SlotTableProps> = ({
                   className="p-1 border-r border-stone-200/60 last:border-r-0"
                   aria-hidden="true"
                 >
-                  <div className={`w-full ${cellHeightClass}`} />
+                  <div className="w-full d-calendar-cell-placeholder" />
                 </td>
               )
             )}

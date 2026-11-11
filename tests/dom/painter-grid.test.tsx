@@ -170,45 +170,7 @@ describe('AvailabilityPainter display interval', () => {
     });
   });
 
-  it('preserves finalized answers when Select All is used before saving', async () => {
-    const poll = makePoll({
-      endHour: 10,
-      finalizedSlot: {
-        date: '2026-10-01',
-        startTime: '09:00',
-        endTime: '09:30',
-        confirmedBy: 'Ada',
-        confirmedAt: '',
-      },
-      participants: [
-        {
-          id: 'participant-1',
-          name: 'Bob',
-          timezone: 'UTC',
-          updatedAt: '',
-          availability: {
-            [key('09:00')]: 'preferred',
-            [key('09:30')]: 'unavailable',
-          },
-        },
-      ],
-    });
-    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
-    renderPainter(poll, 30, onSaveAvailability, 'participant-1');
-
-    await waitFor(() => expect(cell('09:00').dataset.status).toBe('preferred'));
-    fireEvent.click(screen.getByText('Quick fill tools'));
-    fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save My Availability' }));
-
-    await waitFor(() => expect(onSaveAvailability).toHaveBeenCalledOnce());
-    expect(onSaveAvailability.mock.calls[0]?.[2]).toEqual({
-      [key('09:00')]: 'preferred',
-      [key('09:30')]: 'available',
-    });
-  });
-
-  it('keeps loaded answers when a stroke starts on a finalized cell', async () => {
+  it('is read-only once a meeting time is confirmed, because the server refuses answers then', async () => {
     const poll = makePoll({
       endHour: 10,
       finalizedSlot: {
@@ -228,12 +190,28 @@ describe('AvailabilityPainter display interval', () => {
         },
       ],
     });
-    renderPainter(poll, 30, undefined, 'participant-1');
+    const onSaveAvailability = vi.fn().mockResolvedValue(undefined);
+    renderPainter(poll, 30, onSaveAvailability, 'participant-1');
 
     await waitFor(() => expect(cell('09:30').dataset.status).toBe('preferred'));
-    finishPointerStroke(cell('09:00'));
+    expect(cell('09:00').dataset.finalized).toBe('true');
+    expect(cell('09:30').dataset.finalized).toBe('false');
 
+    // Neither a pointer stroke, a keyboard activation nor a quick-fill tool changes anything.
+    finishPointerStroke(cell('09:00'));
+    finishPointerStroke(cell('09:30'));
+    fireEvent.click(cell('09:30'));
+    fireEvent.click(screen.getByText('Quick fill tools'));
     expect(cell('09:30').dataset.status).toBe('preferred');
+    expect(cell('09:00').dataset.status).toBe('none');
+    for (const control of [cell('09:00'), cell('09:30'), screen.getByRole('button', { name: 'Select All' })]) {
+      expect((control as HTMLButtonElement).disabled).toBe(true);
+    }
+
+    const save = screen.getByRole('button', { name: 'Save My Availability' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(document.querySelector('[data-save-status]')?.textContent).toMatch(/voting is closed/i);
+    expect(onSaveAvailability).not.toHaveBeenCalled();
   });
 
   it("never loads another participant's answers when their name is typed", async () => {
@@ -411,11 +389,10 @@ describe('AvailabilityPainter display interval', () => {
 
     // The pointer jumps from 09:00 straight to 10:30; 09:30 and 10:00 never get an event.
     fireEvent.pointerDown(cell('09:00'), { pointerId: 1, pointerType: 'mouse', button: 0 });
-    // React derives pointerenter from pointerout; jsdom has no PointerEvent, so
-    // pointerType is attached by hand.
-    const out = new MouseEvent('pointerout', { bubbles: true, relatedTarget: cell('10:30') });
-    Object.defineProperty(out, 'pointerType', { value: 'mouse' });
-    fireEvent(cell('09:00'), out);
+    // jsdom has no PointerEvent, so pointerType is attached by hand.
+    const over = new MouseEvent('pointerover', { bubbles: true });
+    Object.defineProperty(over, 'pointerType', { value: 'mouse' });
+    fireEvent(cell('10:30'), over);
     fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'mouse', button: 0 });
 
     await savePainter();
@@ -431,9 +408,11 @@ describe('AvailabilityPainter display interval', () => {
     renderPainter(makePoll({ endHour: 10 }), 60);
     const block = cell('09:00');
 
-    fireEvent.keyDown(block, { key: 'Enter' });
+    // Enter and Space on a focused button arrive as a click with detail 0, the
+    // same as a screen reader's or voice control's activation.
+    fireEvent.click(block);
     expect(block.dataset.status).toBe('available');
-    fireEvent.keyDown(block, { key: ' ' });
+    fireEvent.click(block);
     expect(block.dataset.status).toBe('none');
   });
 
