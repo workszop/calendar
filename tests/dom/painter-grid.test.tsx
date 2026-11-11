@@ -214,6 +214,23 @@ describe('AvailabilityPainter display interval', () => {
     expect(onSaveAvailability).not.toHaveBeenCalled();
   });
 
+  it('empties the grid when the response it loaded is removed from the poll', async () => {
+    const bob = {
+      id: 'participant-1', name: 'Bob', timezone: 'UTC', updatedAt: '',
+      availability: { [key('09:30')]: 'preferred' as const },
+    };
+    const props = { gridInterval: 30 as const, onSaveAvailability: vi.fn() };
+    const { rerender } = render(
+      h(AvailabilityPainter, { ...props, poll: makePoll({ participants: [bob] }), ownParticipantId: 'participant-1' })
+    );
+    await waitFor(() => expect(cell('09:30').dataset.status).toBe('preferred'));
+
+    // The organizer removed that response; the app also forgets its stored id.
+    rerender(h(AvailabilityPainter, { ...props, poll: makePoll({ participants: [] }), ownParticipantId: undefined }));
+
+    await waitFor(() => expect(cell('09:30').dataset.status).toBe('none'));
+  });
+
   it("never loads another participant's answers when their name is typed", async () => {
     const poll = makePoll({
       endHour: 10,

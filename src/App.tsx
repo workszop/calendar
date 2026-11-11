@@ -228,6 +228,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PollError | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  // False until the first list request answers, so home never shows "no meetings yet" while it is still loading.
+  const [listLoaded, setListLoaded] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [createdPoll, setCreatedPoll] = useState<Poll | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -408,8 +410,10 @@ export default function App() {
         setPollsList(data);
         setListError(null);
       }
+      setListLoaded(true);
       return data;
     } catch (err) {
+      setListLoaded(true);
       if (requestId === listRequestRef.current) {
         const message = errorMessage(err, 'Could not load the poll list');
         setListError(message);
@@ -733,6 +737,11 @@ export default function App() {
         'DELETE',
         'Failed to remove participant'
       );
+      // This browser's own response is gone: its next save is a new response.
+      if (getStoredResponse(activePoll.id)?.participantId === target.id) {
+        removeStoredResponse(activePoll.id);
+        setAccessVersion((version) => version + 1);
+      }
       if (!shown) return;
       if (activeParticipantFilter === target.id) setActiveParticipantFilter(null);
       showToast(`Removed ${target.name}'s response`);
@@ -747,8 +756,9 @@ export default function App() {
     if (!target) return;
     try {
       const res = await fetchWithRetry(pollPath(target.id), { method: 'DELETE', headers: organizerHeaders(target.id) });
-      // 404: someone already deleted it, which is the outcome asked for.
-      if (!res.ok && res.status !== 404) throw await organizerFailure(res, target.id, 'Failed to delete poll');
+      // The API's own 404: someone already deleted it, which is the outcome asked
+      // for. A proxy's 404 page says nothing about the poll.
+      if (!res.ok && !(res.status === 404 && isApiJson(res))) throw await organizerFailure(res, target.id, 'Failed to delete poll');
       forgetPoll(target.id);
       setAccessVersion((version) => version + 1);
       showToast(`Deleted "${target.title}"`);
@@ -1162,7 +1172,7 @@ export default function App() {
       />
 
       <main className="d-shell-main flex-1 w-full">
-        {loading ? (
+        {loading || (screen === 'home' && !listLoaded) ? (
           <div role="status" aria-labelledby="loading-caption" className="d-shell-loading">
             <div aria-hidden="true" />
             <p id="loading-caption">Loading meeting poll...</p>

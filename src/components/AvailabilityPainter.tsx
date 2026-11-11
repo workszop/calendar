@@ -198,6 +198,16 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
     setUserName((previous) => previous || ownParticipant.name);
   }, [ownParticipant]);
 
+  // The response loaded here was removed from the poll: its answers and its
+  // "saved" status no longer describe anything stored.
+  useEffect(() => {
+    const loadedId = loadedParticipantIdRef.current;
+    if (!loadedId || poll.participants.some((participant) => participant.id === loadedId)) return;
+    loadedParticipantIdRef.current = undefined;
+    setAvailability({});
+    setSaveState('idle');
+  }, [poll.participants]);
+
   // ─── Timer cleanup ───
   useEffect(
     () => () => {

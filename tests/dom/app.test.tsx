@@ -574,4 +574,46 @@ describe('App navigation and home contract', () => {
     await screen.findByRole('heading', { name: 'Meetings' });
     expect(deleteAttempts).toBe(2);
   });
+
+  it("keeps the poll and its organizer code when a proxy, not the API, answers the delete with 404", async () => {
+    const poll = makePoll('p1', 'Still here');
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = route(input);
+      if (url === '/api/polls') return Promise.resolve(jsonResponse([summary(poll)]));
+      if (url === '/api/polls/p1/access') return Promise.resolve(jsonResponse({ organizer: true }));
+      if (url === '/api/polls/p1' && init?.method === 'DELETE') {
+        return Promise.resolve(new Response('<html>Not found</html>', { status: 404, headers: { 'Content-Type': 'text/html' } }));
+      }
+      if (url === '/api/polls/p1') return Promise.resolve(jsonResponse(poll));
+      throw new Error(`Unexpected ${init?.method ?? 'GET'} ${url}`);
+    }));
+    window.history.replaceState({}, '', '/?poll=p1');
+
+    render(h(App));
+    await screen.findByRole('heading', { name: 'Still here' });
+    fireEvent.click(screen.getByText('Manage poll'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete poll' }));
+
+    await screen.findByText('Failed to delete poll');
+    expect(screen.getByRole('heading', { name: 'Still here' })).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('timesync_organizer_codes') ?? '{}').p1).toBe('code-p1');
+  });
+
+  it('shows loading, not the first-run empty state, while the home list is still on its way', async () => {
+    const poll = makePoll('p1', 'P1');
+    const list = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (route(input) === '/api/polls') return list.promise;
+      throw new Error(`Unexpected ${route(input)}`);
+    }));
+
+    render(h(App));
+    await screen.findByText('Loading meeting poll...');
+    expect(screen.queryByText('Your first meeting starts here.')).toBeNull();
+
+    list.resolve(jsonResponse([summary(poll)]));
+    expect(await screen.findByText('P1')).toBeTruthy();
+    expect(screen.queryByText('Your first meeting starts here.')).toBeNull();
+  });
 });

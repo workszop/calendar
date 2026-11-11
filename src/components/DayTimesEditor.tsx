@@ -466,6 +466,18 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
     toggleSlot(...splitSlotKey(key));
   };
 
+  // Where the browser sends a click for the key press, it does so while handling
+  // keyup. Once that moment has passed the marker is stale and would swallow a
+  // later click that has no key press behind it (a screen reader's activation).
+  const handleTableKeyUp = () => {
+    if (suppressClickRef.current !== 'keyboard') return;
+    setTimeout(() => {
+      if (suppressClickRef.current !== 'keyboard') return;
+      suppressClickRef.current = null;
+      suppressClickKeyRef.current = null;
+    }, 0);
+  };
+
   const renderCell = (date: string, time: string) => {
     const selected = selectedSets.get(date)?.has(time) ?? false;
     const endTime = addMinutesToTime(time, slotInterval);
@@ -532,6 +544,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
               {...stroke.tableProps}
               onClick={handleTableClick}
               onKeyDown={handleTableKeyDown}
+              onKeyUp={handleTableKeyUp}
               aria-label="Proposed times by day"
             >
               <thead>
