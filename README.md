@@ -1,4 +1,4 @@
-# cal-synch
+# meet-me
 
 Group meeting scheduler. The organiser creates a poll with candidate dates and
 an hour range, participants paint their availability, the group heatmap and a
@@ -6,7 +6,8 @@ ranked list of best windows show where everyone overlaps, and the organiser
 locks the agreed time with calendar export.
 
 Stack: Vite + React 19 + Tailwind v4 (edulab design system), Express API with
-JSON file storage in `data/polls.json` (created on first run, not committed).
+JSON file storage in `data/polls.json` locally (created on first run, not
+committed) and Netlify Blobs when deployed.
 
 ## Run
 
@@ -114,7 +115,7 @@ the full meeting window and shows attendance for the complete duration.
 **Add dates** in the meeting workspace proposes more candidate dates for an
 open poll, using its existing hour-range controls and drag grid. Existing dates
 and answers are unchanged. It is hidden once a time is locked; re-open voting
-first. Like other edits, it is available to anyone with access to the app.
+first. It needs the organiser code, like locking a time.
 Adding later dates also pushes back the poll's automatic cleanup.
 
 ## Automatic poll cleanup
@@ -131,7 +132,8 @@ a new poll is never already past that window. The window is `RETENTION_DAYS` in
 `server/retention.ts`.
 
 The sweep checks 10 polls at a time in a new random order on every run and
-stops taking new polls after 20 seconds (`CLEANUP_TIME_BUDGET_MS`), well inside
+stops taking new polls after 20 seconds (the `CLEANUP_TIME_BUDGET_MS`
+environment variable changes this), well inside
 Netlify's 30-second limit for scheduled functions. Polls it did not reach are
 logged as "left for the next run" and get their turn on a later run. A failed
 check of one poll, or a failed move of the old `polls` array, is logged and

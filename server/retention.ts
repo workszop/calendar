@@ -70,7 +70,7 @@ export function withRetention(store: PollStore, clock: Clock = () => new Date())
 // ─── Scheduled cleanup ───
 
 /** Polls checked at once by the sweep. */
-export const DEFAULT_CLEANUP_CONCURRENCY = 10;
+const DEFAULT_CLEANUP_CONCURRENCY = 10;
 /**
  * Time the sweep may spend before it stops taking new polls. Netlify stops a
  * scheduled function after 30 seconds; this leaves room for the running reads,

@@ -73,6 +73,21 @@ describe('HeatmapGrid finalization control', () => {
     expect(inspector?.textContent).toBe(selectedDetail);
   });
 
+  it('previews hovered cells again after a pinned cell is unpinned', () => {
+    render(h(HeatmapGrid, {
+      poll: makePoll({ endHour: 11 }), gridInterval: 30, activeParticipantFilter: null, onSelectParticipantFilter: () => {},
+    }));
+
+    // A real click focuses the cell, pins it, and a second click unpins it.
+    const first = document.getElementById('slot-2026-10-01-09:00') as HTMLElement;
+    fireEvent.focus(first);
+    fireEvent.click(first);
+    fireEvent.click(first);
+
+    fireEvent.mouseEnter(document.getElementById('slot-2026-10-01-09:30') as HTMLElement);
+    expect(document.querySelector<HTMLElement>('[data-selected-slot]')?.dataset.selectedSlot).toBe('2026-10-01T09:30');
+  });
+
   it('shows a true empty state instead of a zero-count heatmap before responses', () => {
     render(h(HeatmapGrid, {
       poll: makePoll({ participants: [] }),

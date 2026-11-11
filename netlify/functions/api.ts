@@ -19,8 +19,8 @@ export default withLambda(async (event, context): Promise<HandlerResponse> => {
       ? `/api${event.path.slice(FUNCTION_PATH.length)}`
       : event.path;
     return await serverless(app)({ ...event, path }, context) as HandlerResponse;
-  } catch {
-    console.error('Netlify meeting API initialization failed');
+  } catch (err) {
+    console.error('Netlify meeting API initialization failed:', err);
     return {
       statusCode: 503,
       headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },

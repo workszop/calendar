@@ -258,7 +258,6 @@ export default function App() {
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const overviewTabRef = useRef<HTMLButtonElement | null>(null);
   const focusOverviewTabRef = useRef(false);
-  const pollsListRef = useRef<PollSummary[]>([]);
   const listRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
   const navigationAbortRef = useRef<AbortController | null>(null);
@@ -390,7 +389,6 @@ export default function App() {
         data = ids.flatMap((id) => byId.get(id) ?? []);
       }
       if (requestId === listRequestRef.current) {
-        pollsListRef.current = data;
         setPollsList(data);
         setListError(null);
       }
@@ -555,11 +553,9 @@ export default function App() {
   useEffect(() => {
     if (didInit.current) return;
     didInit.current = true;
-    const init = async () => {
-      await fetchPollsList();
-      await resolveInitialRoute('replace', true);
-    };
-    void init();
+    // The list loads in the background, so a shared poll link does not wait for it.
+    void fetchPollsList();
+    void resolveInitialRoute('replace', true);
   }, [fetchPollsList, resolveInitialRoute]);
 
   useEffect(() => {
@@ -738,9 +734,10 @@ export default function App() {
       if (!res.ok && res.status !== 404) throw await organizerFailure(res, target.id, 'Failed to delete poll');
       forgetPoll(target.id);
       setAccessVersion((version) => version + 1);
-      await fetchPollsList();
       showToast(`Deleted "${target.title}"`);
+      // Going home reloads the list itself.
       if (activePollIdRef.current === target.id) await goHome('replace');
+      else await fetchPollsList();
     } catch (err) {
       showToast(errorMessage(err, 'Error deleting poll'));
     }
@@ -837,7 +834,7 @@ export default function App() {
       void fetchPollsList();
       // A successful POST remains discoverable even if the user navigated away,
       // but stale detail must never replace the current screen.
-      if (navigationRequestId !== navigationRequestRef.current || screen !== 'create') return;
+      if (navigationRequestId !== navigationRequestRef.current) return;
       setCreatedPoll(newPoll);
       setActivePoll(null);
       setActiveParticipantFilter(null);

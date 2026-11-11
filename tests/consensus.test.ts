@@ -63,6 +63,21 @@ describe('analyzeWindow', () => {
 });
 
 describe('findBestMeetingWindows', () => {
+  it('ranks by head count, not by the rounded percentage, in large polls', () => {
+    const person = (i: number, availability: Poll['participants'][number]['availability']) =>
+      ({ id: `p${i}`, name: `P${i}`, timezone: 'UTC', updatedAt: '', availability });
+    // Of 200 people: three prefer 09:00 (1.5%), four are merely available at 10:00 (2%).
+    // Both round to 2%, and the preferred votes score higher.
+    const participants = Array.from({ length: 200 }, (_, i) => {
+      if (i < 3) return person(i, { '2026-10-01T09:00': 'preferred', '2026-10-01T09:30': 'preferred' });
+      if (i < 7) return person(i, { '2026-10-01T10:00': 'available', '2026-10-01T10:30': 'available' });
+      return person(i, {});
+    });
+    const [best] = findBestMeetingWindows({ ...poll, participants });
+    expect(best.startTime).toBe('10:00');
+    expect(best.availableCount).toBe(4);
+  });
+
   it('ranks the window everyone can attend first', () => {
     const [best] = findBestMeetingWindows(poll);
     expect(best.startTime).toBe('10:00');

@@ -179,7 +179,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const inspected = inspectedKey ? analyses.get(inspectedKey) ?? null : null;
 
   // ─── Callbacks (stable, so HeatCell's memo holds) ───
-  const handleHover = useCallback((key: string) => setHoveredKey(key), []);
+  // Moving the pointer onto a cell takes over from a cell that merely kept
+  // focus after a click, so hover previews keep working once a pin is removed.
+  const handleHover = useCallback((key: string) => {
+    setHoveredKey(key);
+    setFocusedKey(null);
+  }, []);
   const handleFocus = useCallback((key: string) => setFocusedKey(key), []);
   const handlePin = useCallback(
     (key: string) => setPinnedKey((previous) => (previous === key ? null : key)),

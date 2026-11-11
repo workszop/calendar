@@ -502,6 +502,12 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
           ? saveError || 'Could not save your answer.'
           : 'Your answer is kept here until you save.';
 
+  // Counted in displayed blocks, so an hourly cell over two half-hour slots is one.
+  let answeredBlocks = 0;
+  for (const block of blocks.values()) {
+    if (getBlockStatus(availability, block) !== 'none') answeredBlocks += 1;
+  }
+
   return (
     <div
       className="d-answer-workspace"
@@ -549,8 +555,8 @@ export const AvailabilityPainter: React.FC<AvailabilityPainterProps> = ({
 
         <div className="d-answer-controls" data-visual-group="answer-tools">
           <div className="d-answer-selection-row">
-            <span className="d-answer-selection-count" data-selection-count={Object.keys(availability).length}>
-              {Object.keys(availability).length} answered blocks · {activeBrushDef.label} selected
+            <span className="d-answer-selection-count" data-selection-count={answeredBlocks}>
+              {answeredBlocks} answered {answeredBlocks === 1 ? 'block' : 'blocks'} · {activeBrushDef.label} selected
             </span>
             <button
               type="button"

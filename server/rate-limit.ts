@@ -25,7 +25,7 @@ export const DEFAULT_RATE_LIMITS: Required<RateLimitConfig> = {
 };
 
 /** Tracked clients per bucket. Past it, the oldest windows are evicted first. */
-export const DEFAULT_MAX_TRACKED_CLIENTS = 50_000;
+const DEFAULT_MAX_TRACKED_CLIENTS = 50_000;
 
 export type ClientIp = (req: express.Request) => string;
 

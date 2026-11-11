@@ -459,7 +459,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
       data-visual-group="time-selection"
       data-disabled={disabled ? 'true' : 'false'}
       data-selected-dates={selectedDates.join(',')}
-      data-slot-interval={DRAFT_SLOT_INTERVAL}
+      data-slot-interval={slotInterval}
       data-start-hour={draft.startHour}
       data-end-hour={draft.endHour}
       data-selected-count={selectedCount}
@@ -467,7 +467,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
       <legend className="sr-only">Proposed times</legend>
       <div className="day-times-instructions" id={`${idPrefix}-instructions`}>
         <span>
-          Click a 30-minute slot to toggle it. Drag vertically within one day to select a range. Gaps are fine.
+          Click a {slotInterval}-minute slot to toggle it. Drag vertically within one day to select a range. Gaps are fine.
         </span>
         <span className="day-times-touch-hint">On touch, drag cells to select; swipe the Time column to scroll.</span>
       </div>
@@ -475,7 +475,7 @@ export const DayTimesEditor: React.FC<DayTimesEditorProps> = ({
         className="day-times-grid-wrap"
         data-proposal-grid={selectedDates.length ? '' : undefined}
         data-single-day-lock="true"
-        data-slot-interval={DRAFT_SLOT_INTERVAL}
+        data-slot-interval={slotInterval}
         data-selected-dates={selectedDates.join(',')}
         data-start-hour={draft.startHour}
         data-end-hour={draft.endHour}

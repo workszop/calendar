@@ -96,15 +96,6 @@
   border-bottom: 1px solid var(--line-2);
 }
 
-.d-shell-kicker {
-  margin: 0 0 8px;
-  color: var(--ink-2);
-  font-size: var(--ui-caption, 12px);
-  font-weight: 600;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-
 .d-shell-poll-meta {
   display: flex;
   align-items: center;
@@ -436,7 +427,7 @@
   line-height: 1.1;
 }
 
-.d-shell-share-ready > p:not(.d-shell-kicker) {
+.d-shell-share-ready > p {
   margin: 0;
   color: var(--ink-2);
   font-size: var(--ui-body, 16px);
@@ -522,8 +513,7 @@
   line-height: 1.6;
 }
 
-.d-home-create,
-.d-home-empty-action {
+.d-home-create {
   flex-shrink: 0;
   min-height: 46px;
   padding-inline: 22px;
@@ -743,7 +733,6 @@
   font-size: var(--ui-small, 14px);
 }
 
-.d-home-hint,
 .d-home-muted {
   margin: 0;
   color: var(--ink-2);

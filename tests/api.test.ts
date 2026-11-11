@@ -588,6 +588,9 @@ describe('poll API', () => {
       const invalid = await api('POST', '/api/polls', { title: 'Zoned', dates: ['2026-10-01'], timezone });
       expect(invalid.status, timezone).toBe(400);
       expect(invalid.json).toEqual({ error: 'timezone must be a valid IANA time zone, e.g. Europe/Warsaw.' });
+      const response = await api('POST', `/api/polls/${valid.json.id}/respond`, { name: 'Zed', timezone, availability: {} });
+      expect(response.status, timezone).toBe(400);
+      expect(response.json).toEqual({ error: 'timezone must be a valid IANA time zone, e.g. Europe/Warsaw.' });
     }
 
     const absent = await api('POST', '/api/polls', { title: 'Zoneless', dates: ['2026-10-01'] });

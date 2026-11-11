@@ -38,7 +38,6 @@ export interface CreatePollFormController extends CreatePollFormValues {
   setCreatorName: (value: string) => void;
   setCreatorEmail: (value: string) => void;
   /** Reset every field while keeping this hook mounted. */
-  reset: (options?: Partial<Omit<CreatePollFormValues, 'draft'>>) => void;
 }
 
 export interface CreatePollValidation {
@@ -48,10 +47,10 @@ export interface CreatePollValidation {
 
 // ─── Helpers ───
 /** Candidate dates after today, Monday through Sunday, for the date presets. */
-export function getNextDates(count: number, startOffset = 1): string[] {
+export function getNextDates(count: number): string[] {
   const now = new Date();
   return Array.from({ length: count }, (_, i) => {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + startOffset + i);
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1 + i);
     return toDateStr(date);
   });
 }
@@ -151,25 +150,15 @@ export function rememberCreatePollOrganizer(values: Pick<CreatePollFormValues, '
 
 // ─── Hook ───
 /** Controlled form state for the create page. */
-export function useCreatePollForm(initialLocation = '', initiallyEmpty = false): CreatePollFormController {
+export function useCreatePollForm(): CreatePollFormController {
   const storedUser = getStoredUser();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [location, setLocation] = useState(initialLocation);
+  const [location, setLocation] = useState('');
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [creatorName, setCreatorName] = useState(storedUser.name);
   const [creatorEmail, setCreatorEmail] = useState(storedUser.email);
-  const draft = useProposalDraft(DEFAULT_CREATE_START_HOUR, DEFAULT_CREATE_END_HOUR, initiallyEmpty);
-
-  const reset = (options: Partial<Omit<CreatePollFormValues, 'draft'>> = {}) => {
-    setTitle(options.title ?? '');
-    setDescription(options.description ?? '');
-    setLocation(options.location ?? initialLocation);
-    setDurationMinutes(options.durationMinutes ?? 60);
-    setCreatorName(options.creatorName ?? getStoredUser().name);
-    setCreatorEmail(options.creatorEmail ?? getStoredUser().email);
-    draft.reset(DEFAULT_CREATE_START_HOUR, DEFAULT_CREATE_END_HOUR);
-  };
+  const draft = useProposalDraft(DEFAULT_CREATE_START_HOUR, DEFAULT_CREATE_END_HOUR, true);
 
   return {
     title,
@@ -185,6 +174,5 @@ export function useCreatePollForm(initialLocation = '', initiallyEmpty = false):
     setDurationMinutes,
     setCreatorName,
     setCreatorEmail,
-    reset,
   };
 }

@@ -5,7 +5,6 @@
   --day-times-selected: var(--yellow);
   --day-times-selected-ink: var(--yellow-ink);
   --day-times-unselected: var(--surface);
-  --day-times-boundary: var(--ink-2);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -254,8 +253,7 @@
   text-align: center;
 }
 
-.day-times-copy-button svg,
-.day-times-copy-close svg {
+.day-times-copy-button svg {
   width: 0.9rem;
   height: 0.9rem;
   flex: 0 0 auto;

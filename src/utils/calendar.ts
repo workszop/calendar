@@ -5,7 +5,7 @@ import { downloadTextFile, fileSafeName } from './download';
 // Intl formatting is the hot path of every grid render, so results are cached
 // per date string. Keys are stable identifiers, and the app runs in one locale
 // per session, so the map never needs invalidating.
-export interface DateHeading {
+interface DateHeading {
   weekday: string;
   dayMonth: string;
   full: string;
@@ -39,8 +39,7 @@ export function formatTimeSlot(timeStr: string): string {
   const hourWithinDay = ((h % 24) + 24) % 24;
   const period = hourWithinDay >= 12 ? 'PM' : 'AM';
   const displayHour = hourWithinDay % 12 === 0 ? 12 : hourWithinDay % 12;
-  const displayMinute = m === 0 ? '00' : m < 10 ? `0${m}` : m;
-  return `${displayHour}:${displayMinute} ${period}`;
+  return `${displayHour}:${String(m).padStart(2, '0')} ${period}`;
 }
 
 export function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
@@ -84,7 +83,7 @@ function getZoneFormatter(timeZone: string): Intl.DateTimeFormat | null {
 }
 
 /** Whether the runtime knows this IANA zone name. */
-export function isValidTimeZone(timeZone: string): boolean {
+function isValidTimeZone(timeZone: string): boolean {
   return Boolean(timeZone) && getZoneFormatter(timeZone) !== null;
 }
 
@@ -92,7 +91,7 @@ export function isValidTimeZone(timeZone: string): boolean {
  * The zone's UTC offset in minutes at one instant, e.g. +120 for
  * Europe/Warsaw in summer and +330 for Asia/Kolkata. Unknown zones are UTC.
  */
-export function getTimeZoneOffsetMinutes(timeZone: string, instant: Date): number {
+function getTimeZoneOffsetMinutes(timeZone: string, instant: Date): number {
   const formatter = getZoneFormatter(timeZone);
   if (!formatter) return 0;
   const parts: Record<string, number> = {};
@@ -136,7 +135,7 @@ export function zonedTimeToUtc(date: string, time: string, timeZone: string): Da
 }
 
 /** A UTC instant in the iCalendar/Google compact form, e.g. "20261001T073000Z". */
-export function toCompactUtc(instant: Date): string {
+function toCompactUtc(instant: Date): string {
   return instant.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
@@ -226,7 +225,7 @@ export function generateGoogleCalendarUrl(poll: Poll, slot: FinalizedSlot): stri
 
   const title = encodeURIComponent(poll.title);
   const details = encodeURIComponent(
-    `${poll.description ? poll.description + '\n\n' : ''}Agreed via TimeSync Poll: ${window.location.href}\nConfirmed by: ${slot.confirmedBy}`
+    `${poll.description ? poll.description + '\n\n' : ''}Agreed via meet-me: ${window.location.href}\nConfirmed by: ${slot.confirmedBy}`
   );
   const location = encodeURIComponent(poll.location || '');
   const zone = isValidTimeZone(poll.timezone) ? `&ctz=${encodeURIComponent(poll.timezone)}` : '';
@@ -251,7 +250,7 @@ export function generateOutlookUrl(poll: Poll, slot: FinalizedSlot): string {
 }
 
 /** Escape an RFC 5545 TEXT value before putting it on a content line. */
-export function escapeIcsText(value: string): string {
+function escapeIcsText(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
     .replace(/\r\n|\r|\n/g, '\\n')
@@ -262,7 +261,7 @@ export function escapeIcsText(value: string): string {
  * Fold an iCalendar content line at 75 UTF-8 octets, as required by RFC 5545.
  * Continuation lines include their leading space in the 75-octet limit.
  */
-export function foldIcsLine(line: string): string {
+function foldIcsLine(line: string): string {
   const encoder = new TextEncoder();
   if (encoder.encode(line).length <= 75) return line;
 
@@ -306,7 +305,7 @@ export function generateIcsContent(poll: Poll, slot: FinalizedSlot): string {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//TimeSync//Meeting Poll//EN',
+    'PRODID:-//meet-me//Meeting Poll//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     'BEGIN:VEVENT',

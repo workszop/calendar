@@ -26,7 +26,7 @@ export const MAX_AVAILABILITY_ENTRIES = MAX_POLL_DATES * 96;
  */
 export const MAX_POLL_BYTES = 2_000_000;
 /** How far ahead a candidate date may be, in days from today (UTC). */
-export const MAX_DAYS_AHEAD = 366;
+const MAX_DAYS_AHEAD = 366;
 /** Largest accepted JSON request body. 60 days of 15-minute answers is ~190 kB. */
 export const MAX_BODY_SIZE = '256kb';
 

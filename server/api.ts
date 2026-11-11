@@ -68,6 +68,31 @@ function isCalendarDate(value: unknown): value is string {
 }
 
 /**
+ * Candidate dates from a request: each a real calendar day, deduplicated and
+ * sorted, at most MAX_POLL_DATES of them, none in the past or over a year ahead.
+ */
+function parseCandidateDates(
+  raw: unknown[],
+  now: Date
+): { ok: true; value: string[] } | { ok: false; error: string } {
+  const badDate = raw.find((d) => !isCalendarDate(d));
+  if (badDate !== undefined) {
+    return { ok: false, error: `Invalid date "${String(badDate)}" - expected YYYY-MM-DD.` };
+  }
+  const dates = [...new Set(raw as string[])].sort();
+  if (dates.length > MAX_POLL_DATES) {
+    return { ok: false, error: `A poll can have at most ${MAX_POLL_DATES} dates.` };
+  }
+  const earliest = earliestPollDate(now);
+  const pastDate = dates.find((d) => d < earliest);
+  if (pastDate) return { ok: false, error: `${pastDate} is in the past.` };
+  const latest = latestPollDate(now);
+  const tooFar = dates.find((d) => d > latest);
+  if (tooFar) return { ok: false, error: `${tooFar} is too far ahead; choose dates within the next year.` };
+  return { ok: true, value: dates };
+}
+
+/**
  * A refusal decided inside a store update closure. Throwing it aborts the
  * write; the error handler turns it into the JSON answer. A closure may run
  * again after a storage conflict, so a thrown refusal can never leak from an
@@ -101,7 +126,7 @@ function optionalText(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() || fallback : fallback;
 }
 
-export type ParsedDayHours =
+type ParsedDayHours =
   | { ok: true; value?: Record<string, DayHours> }
   | { ok: false; error: string };
 
@@ -109,7 +134,7 @@ export type ParsedDayHours =
  * Validates and normalizes per-date hour windows in one pass: malformed input
  * is rejected with a message rather than silently dropped.
  */
-export function parseDayHours(input: unknown, dates: string[]): ParsedDayHours {
+function parseDayHours(input: unknown, dates: string[]): ParsedDayHours {
   if (input === undefined || input === null) return { ok: true };
   if (typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, error: "dayHours must be an object keyed by date." };
@@ -138,7 +163,7 @@ export function parseDayHours(input: unknown, dates: string[]): ParsedDayHours {
   return Object.keys(value).length ? { ok: true, value } : { ok: true };
 }
 
-export type ParsedProposedSlots =
+type ParsedProposedSlots =
   | { ok: true; value?: Record<string, string[]> }
   | { ok: false; error: string };
 
@@ -146,7 +171,7 @@ export type ParsedProposedSlots =
  * Validates an exact per-date proposal: every poll date needs at least one
  * "HH:mm" slot start on the poll's interval grid. Gaps are allowed.
  */
-export function parseProposedSlots(input: unknown, dates: string[], slotInterval: number): ParsedProposedSlots {
+function parseProposedSlots(input: unknown, dates: string[], slotInterval: number): ParsedProposedSlots {
   if (input === undefined || input === null) return { ok: true };
   if (typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, error: "proposedSlots must be an object keyed by date." };
@@ -192,12 +217,12 @@ function proposalSpan(slots: Record<string, string[]>, slotInterval: number): { 
   };
 }
 
-export type ParsedAvailability =
+type ParsedAvailability =
   | { ok: true; value: Record<string, SlotStatus> }
   | { ok: false; error: string };
 
 /** Availability must be a flat map of "YYYY-MM-DDTHH:mm" keys to known statuses. */
-export function parseAvailability(input: unknown): ParsedAvailability {
+function parseAvailability(input: unknown): ParsedAvailability {
   if (input === undefined || input === null) return { ok: true, value: {} };
   if (typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, error: "availability must be an object keyed by slot." };
@@ -406,27 +431,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         return;
       }
 
-      const rawDates = body.dates as unknown[];
-      const badDate = rawDates.find((d) => !isCalendarDate(d));
-      if (badDate !== undefined) {
-        res.status(400).json({ error: `Invalid date "${String(badDate)}" - expected YYYY-MM-DD.` });
+      const parsedDates = parseCandidateDates(body.dates, clock());
+      if (!parsedDates.ok) {
+        res.status(400).json({ error: parsedDates.error });
         return;
       }
-      const dates = [...new Set(rawDates as string[])].sort();
-      if (dates.length > MAX_POLL_DATES) {
-        res.status(400).json({ error: `A poll can have at most ${MAX_POLL_DATES} dates.` });
-        return;
-      }
-      const pastDate = dates.find((d) => d < earliestPollDate(clock()));
-      if (pastDate) {
-        res.status(400).json({ error: `${pastDate} is in the past.` });
-        return;
-      }
-      const tooFar = dates.find((d) => d > latestPollDate(clock()));
-      if (tooFar) {
-        res.status(400).json({ error: `${tooFar} is too far ahead; choose dates within the next year.` });
-        return;
-      }
+      const dates = parsedDates.value;
 
       const slotInterval = body.slotInterval ?? 30;
       if (slotInterval !== 15 && slotInterval !== 30) {
@@ -539,22 +549,12 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
         res.status(400).json({ error: "Choose at least one date to add." });
         return;
       }
-      const badDate = (body.dates as unknown[]).find((d) => !isCalendarDate(d));
-      if (badDate !== undefined) {
-        res.status(400).json({ error: `Invalid date "${String(badDate)}" - expected YYYY-MM-DD.` });
+      const parsedDates = parseCandidateDates(body.dates, clock());
+      if (!parsedDates.ok) {
+        res.status(400).json({ error: parsedDates.error });
         return;
       }
-      const newDates = [...new Set(body.dates as string[])].sort();
-      const pastDate = newDates.find((d) => d < earliestPollDate(clock()));
-      if (pastDate) {
-        res.status(400).json({ error: `${pastDate} is in the past.` });
-        return;
-      }
-      const farDate = newDates.find((d) => d > latestPollDate(clock()));
-      if (farDate) {
-        res.status(400).json({ error: `${farDate} is too far ahead; choose dates within the next year.` });
-        return;
-      }
+      const newDates = parsedDates.value;
 
       const organizerCode = readCodeHeader(req, ORGANIZER_HEADER);
 
@@ -653,6 +653,10 @@ export function createApi(source: string | PollStore, options: ApiOptions = {}) 
       ]);
       if (respondTooLong) {
         res.status(400).json({ error: respondTooLong });
+        return;
+      }
+      if (typeof timezone === "string" && timezone.trim() && !TIMEZONE_NAME_RE.test(timezone.trim())) {
+        res.status(400).json({ error: "timezone must be a valid IANA time zone, e.g. Europe/Warsaw." });
         return;
       }
       const parsedAvailability = parseAvailability(availability);

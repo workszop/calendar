@@ -1020,8 +1020,7 @@
 .d-answer-save-action:disabled,
 .d-answer-secondary-action:disabled,
 .d-answer-brush:disabled,
-.d-answer-day-fill:disabled,
-.d-answer-cell:disabled {
+.d-answer-day-fill:disabled {
   cursor: not-allowed;
   opacity: .55;
 }

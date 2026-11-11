@@ -17,14 +17,14 @@ export interface MeetingWindowOption {
   unavailableAttendees: string[];
 }
 
-export interface MeetingWindow {
+interface MeetingWindow {
   startTime: string;
   endTime: string;
   slotTimes: string[];
 }
 
 /** The poll fields that decide which slots exist and how long a meeting is. */
-export type PollSlotConfig = Pick<
+type PollSlotConfig = Pick<
   Poll,
   'durationMinutes' | 'slotInterval' | 'startHour' | 'endHour' | 'dayHours' | 'proposedSlots'
 >;
@@ -175,7 +175,7 @@ export function getWindowAttendance(
   return attendance;
 }
 
-export interface WindowAttendanceSummary {
+interface WindowAttendanceSummary {
   /** Everyone who can attend the whole window, preferred included. */
   availableNames: string[];
   preferredNames: string[];
@@ -293,9 +293,10 @@ export function findBestMeetingWindows(poll: Poll): MeetingWindowOption[] {
     }
   }
 
-  // Sort: descending by percentage, then descending by score (preferred votes), then date/time
+  // Sort: most attendees first (the count, not the rounded percentage, so
+  // large polls never rank fewer people higher), then score (preferred votes), then date/time
   options.sort((a, b) => {
-    if (b.percentage !== a.percentage) return b.percentage - a.percentage;
+    if (b.availableCount !== a.availableCount) return b.availableCount - a.availableCount;
     if (b.score !== a.score) return b.score - a.score;
     if (a.date !== b.date) return a.date.localeCompare(b.date);
     return a.startTime.localeCompare(b.startTime);

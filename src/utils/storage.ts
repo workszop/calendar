@@ -63,7 +63,7 @@ export function setStoredUser(user: { name?: string; email?: string }): void {
 // Organizer codes and each response's edit code live on this device only. A
 // memory copy keeps them usable for the session when storage is blocked.
 
-export interface StoredResponse {
+interface StoredResponse {
   participantId: string;
   editCode: string;
 }

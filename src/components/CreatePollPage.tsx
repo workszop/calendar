@@ -42,7 +42,7 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
 }) => {
   // The page starts with dates that are deliberately empty. A selected day is
   // only proposed after the organizer paints it in the direct editor.
-  const form = useCreatePollForm('', true);
+  const form = useCreatePollForm();
   const { title, description, location, durationMinutes, creatorName, creatorEmail, draft } = form;
   const { selectedDates } = draft;
   const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date()));
@@ -442,5 +442,3 @@ export const CreatePollPage: React.FC<CreatePollPageProps> = ({
     </section>
   );
 };
-
-export default CreatePollPage;
